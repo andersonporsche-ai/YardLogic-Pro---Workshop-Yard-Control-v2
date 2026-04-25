@@ -1,0 +1,926 @@
+
+import React, { useState, useEffect, useRef } from 'react';
+import { Vehicle, ConsultantName, WashStatus, DeliveryStatus } from '../types';
+import { CONSULTANTS, PRISMA_COLORS, PORSCHE_MODELS, WORKSHOP_SERVICES, WASH_STATUS_OPTIONS, DELIVERY_STATUS_OPTIONS, getSlotDisplayName, ALERT_THRESHOLDS } from '../constants';
+import { differenceInMinutes } from 'date-fns';
+import { extractLicensePlate } from '../services/geminiService';
+import PrismaScanner from './PrismaScanner';
+
+interface VehicleFormProps {
+  slotIndex: number;
+  existingVehicle?: Vehicle;
+  allActiveVehicles?: Vehicle[];
+  onSave: (vehicle: Vehicle) => void;
+  onRemove?: (id: string, exitTime?: string) => void;
+  onClose: () => void;
+  isDarkMode?: boolean;
+}
+
+const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, allActiveVehicles, onSave, onRemove, onClose, isDarkMode = false }) => {
+  const [showConfirmExit, setShowConfirmExit] = useState(false);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [isPrismaScannerOpen, setIsPrismaScannerOpen] = useState(false);
+  const [isProcessingAI, setIsProcessingAI] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [cameraCapabilities, setCameraCapabilities] = useState<MediaTrackCapabilities | null>(null);
+  const [isFramingStable, setIsFramingStable] = useState(false);
+  const [isPlateCentered, setIsPlateCentered] = useState(false);
+  const [isFocusing, setIsFocusing] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  const [manualExitDate, setManualExitDate] = useState('');
+  const [manualExitTime, setManualExitTime] = useState('');
+  const [idleReason, setIdleReason] = useState('');
+  const [idleActions, setIdleActions] = useState('');
+  const [formData, setFormData] = useState<Partial<Vehicle>>({
+    id: Math.random().toString(36).substr(2, 9).toUpperCase(),
+    plate: '',
+    registrationTime: '',
+    entryTime: '',
+    exitTime: '',
+    model: '',
+    customer: '',
+    service: WORKSHOP_SERVICES[0],
+    consultant: '' as ConsultantName,
+    washStatus: 'Não Solicitado',
+    deliveryStatus: 'Aguardando Liberação',
+    slotIndex: slotIndex,
+    prisma: { number: 0, color: PRISMA_COLORS[0].hex }
+  });
+
+  useEffect(() => {
+    if (existingVehicle) {
+      setFormData(existingVehicle);
+    }
+  }, [existingVehicle]);
+
+  const getConsultantInfo = (name?: ConsultantName) => {
+    if (!name) return { number: '?', firstName: 'N/A' };
+    const index = CONSULTANTS.indexOf(name);
+    return {
+      number: index !== -1 ? index + 1 : '?',
+      firstName: name.split(' ')[0]
+    };
+  };
+
+  const getContrastColor = (hex: string) => {
+    if (!hex) return 'text-white';
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    const yiq = (r * 299 + g * 587 + b * 114) / 1000;
+    return yiq >= 128 ? 'text-slate-950' : 'text-white';
+  };
+
+  const getSLAInfo = () => {
+    if (!existingVehicle?.entryTime) return null;
+    
+    const now = new Date();
+    const entryDate = new Date(existingVehicle.entryTime);
+    const totalMinutes = differenceInMinutes(now, entryDate);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    
+    let colorClass = 'text-emerald-500';
+    let barColor = 'bg-emerald-500';
+    let label = 'Operação Eficaz';
+
+    if (hours >= ALERT_THRESHOLDS.SEVERE) {
+      colorClass = 'text-red-500';
+      barColor = 'bg-red-500';
+      label = 'SLA Excedido';
+    } else if (hours >= ALERT_THRESHOLDS.CRITICAL) {
+      colorClass = 'text-orange-500';
+      barColor = 'bg-orange-500';
+      label = 'Atenção Crítica';
+    } else if (hours >= ALERT_THRESHOLDS.WARNING) {
+      colorClass = 'text-amber-500';
+      barColor = 'bg-amber-500';
+      label = 'Alerta de Prazo';
+    }
+
+    const progress = Math.min((totalMinutes / (ALERT_THRESHOLDS.SEVERE * 60)) * 100, 100);
+
+    return {
+      formatted: `${hours}h ${minutes}m`,
+      colorClass,
+      barColor,
+      label,
+      progress
+    };
+  };
+
+  const handleOpenConfirmExit = () => {
+    const now = new Date();
+    setManualExitDate(now.toISOString().split('T')[0]);
+    setManualExitTime(now.toTimeString().slice(0, 5));
+    setShowConfirmExit(true);
+  };
+
+  const startCamera = async () => {
+    try {
+      setCameraError(null);
+      setZoom(1);
+      setIsFramingStable(false);
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { 
+          facingMode: 'environment',
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        } 
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+      
+      const track = stream.getVideoTracks()[0];
+      // Wait a bit for capabilities to be available
+      setTimeout(() => {
+        if (track.getCapabilities) {
+          const caps = track.getCapabilities();
+          setCameraCapabilities(caps);
+          if (caps.zoom) {
+            setZoom(caps.zoom.min || 1);
+          }
+        }
+      }, 500);
+
+      setIsCameraOpen(true);
+      
+      // Simulate framing stability and centering check
+      setTimeout(() => setIsFramingStable(true), 1500);
+      setTimeout(() => setIsPlateCentered(true), 2500);
+    } catch (err) {
+      console.error("Error accessing camera:", err);
+      setCameraError("Não foi possível acessar a câmera. Verifique as permissões.");
+    }
+  };
+
+  const handleZoomChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = parseFloat(e.target.value);
+    setZoom(value);
+    if (streamRef.current) {
+      const track = streamRef.current.getVideoTracks()[0];
+      if (track.applyConstraints) {
+        track.applyConstraints({ advanced: [{ zoom: value }] as MediaTrackConstraintSet[] }).catch(err => {
+          console.warn("Failed to apply zoom:", err);
+        });
+      }
+    }
+  };
+
+  const triggerAutoFocus = () => {
+    if (streamRef.current) {
+      const track = streamRef.current.getVideoTracks()[0];
+      if (track.applyConstraints) {
+        setIsFocusing(true);
+        // Toggle focus mode to trigger a refocus
+        track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] as MediaTrackConstraintSet[] })
+          .then(() => {
+            // Visual feedback for focus
+            setIsFramingStable(false);
+            setIsPlateCentered(false);
+            setTimeout(() => {
+              setIsFocusing(false);
+              setIsFramingStable(true);
+            }, 1000);
+            setTimeout(() => setIsPlateCentered(true), 1800);
+          })
+          .catch(err => {
+            console.warn("Focus not supported:", err);
+            setIsFocusing(false);
+          });
+      }
+    }
+  };
+
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setIsCameraOpen(false);
+    setCameraError(null);
+    setZoom(1);
+    setIsFramingStable(false);
+    setIsPlateCentered(false);
+  };
+
+  const captureAndProcess = async () => {
+    if (!videoRef.current || !canvasRef.current) return;
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const context = canvas.getContext('2d');
+
+    if (context) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      
+      const base64Image = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+      stopCamera();
+      await processImageWithGemini(base64Image);
+    }
+  };
+
+  const processImageWithGemini = async (base64Data: string) => {
+    setIsProcessingAI(true);
+    setCameraError(null);
+    try {
+      const cleanPlate = await extractLicensePlate(base64Data);
+
+      if (cleanPlate) {
+        setFormData(prev => ({ ...prev, plate: cleanPlate }));
+      } else {
+        setCameraError("Não foi possível ler a placa com precisão. Tente enquadrar melhor.");
+      }
+    } catch (err) {
+      console.error("AI Processing Error:", err);
+      setCameraError("Falha no motor de OCR. Verifique sua conexão.");
+    } finally {
+      setIsProcessingAI(false);
+    }
+  };
+
+  const validateField = (name: string, value: string | number | undefined | null, customFormData?: Partial<Vehicle>) => {
+    const data = customFormData || formData;
+    let error = '';
+    switch (name) {
+      case 'plate':
+        if (!value) error = 'A placa é obrigatória';
+        else if (value.length < 4) error = 'Placa muito curta';
+        else if (typeof value === 'string') {
+          const normalize = (s: string) => s.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+          const normalizedValue = normalize(value);
+          
+          // Formatos: ABC1D23 (Brasil), AB123CD (Argentina), ABC1234 (Antigo/Uruguai)
+          const isMercosulBrazil = /^[A-Z]{3}[0-9][A-Z][0-9]{2}$/.test(normalizedValue);
+          const isMercosulArg = /^[A-Z]{2}[0-9]{3}[A-Z]{2}$/.test(normalizedValue);
+          const isOldFormat = /^[A-Z]{3}[0-9]{4}$/.test(normalizedValue);
+
+          if (!isMercosulBrazil && !isMercosulArg && !isOldFormat) {
+            error = 'Padrão Mercosul ou antigo exigido (Ex: ABC1D23 ou AB123CD)';
+          }
+
+          const duplicate = allActiveVehicles?.find(v => 
+            normalize(v.plate) === normalizedValue && 
+            v.id !== data.id
+          );
+          if (duplicate) error = 'Esta placa já está registrada em outra vaga ativa no pátio';
+        }
+        break;
+      case 'model':
+        if (!value) error = 'O modelo é obrigatório';
+        break;
+      case 'customer':
+        if (!value) error = 'O nome do cliente é obrigatório';
+        break;
+      case 'prismaNumber':
+        if (!value && value !== 0) error = 'O número do prisma é obrigatório';
+        else if (value <= 0) error = 'Número inválido';
+        else {
+          const duplicate = allActiveVehicles?.find(v => 
+            v.prisma.number === value && 
+            v.id !== data.id
+          );
+          if (duplicate) error = `Este Prisma (#${value}) já está em uso por outro veículo no sistema`;
+        }
+        break;
+      case 'service':
+        if (!value) error = 'O serviço é obrigatório';
+        break;
+      case 'consultant':
+        if (!value) error = 'O consultor é obrigatório';
+        break;
+      case 'washStatus':
+        if (!value) error = 'O status é obrigatório';
+        break;
+      case 'deliveryStatus':
+        if (!value) error = 'O status de entrega é obrigatório';
+        else if (['Liberado para Entrega', 'Entregue'].includes(value as string)) {
+          const washStatus = name === 'washStatus' ? value : data.washStatus;
+          if (['Em Fila', 'Lavando'].includes(washStatus)) {
+            error = 'Não é possível liberar/entregar veículo com lavagem pendente ou em execução';
+          }
+        }
+        break;
+    }
+    setErrors(prev => ({ ...prev, [name]: error }));
+    return !error;
+  };
+
+  const handlePrismaScan = (data: { number: number; color: string }) => {
+    const nextData = {
+      ...formData,
+      prisma: {
+        number: data.number,
+        color: data.color
+      }
+    };
+    setFormData(nextData);
+    validateField('prismaNumber', data.number, nextData);
+    setIsPrismaScannerOpen(false);
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+
+    // Final Validation
+    const isPlateValid = validateField('plate', formData.plate);
+    const isModelValid = validateField('model', formData.model);
+    const isCustomerValid = validateField('customer', formData.customer);
+    const isPrismaValid = validateField('prismaNumber', formData.prisma?.number);
+    const isServiceValid = validateField('service', formData.service);
+    const isConsultantValid = validateField('consultant', formData.consultant);
+    const isWashValid = validateField('washStatus', formData.washStatus);
+    const isDeliveryValid = validateField('deliveryStatus', formData.deliveryStatus);
+
+    if (!isPlateValid || !isModelValid || !isCustomerValid || !isPrismaValid || !isServiceValid || !isConsultantValid || !isWashValid || !isDeliveryValid) {
+      return;
+    }
+
+    const finalData = { ...formData };
+    
+    // Record registration time if it's a new entry
+    if (!existingVehicle || !finalData.registrationTime) {
+      finalData.registrationTime = new Date().toISOString();
+    }
+
+    if (!existingVehicle || !finalData.entryTime) {
+      finalData.entryTime = new Date().toISOString();
+    }
+    if (!finalData.plate) {
+      finalData.plate = finalData.id || '';
+    }
+    onSave(finalData as Vehicle);
+  };
+
+  const sla = getSLAInfo();
+  const consultantInfo = getConsultantInfo(formData.consultant);
+  const prismaColor = formData.prisma?.color || '#3b82f6';
+  const prismaNumber = formData.prisma?.number || 0;
+  const textColor = getContrastColor(prismaColor);
+  const isDarkText = textColor === 'text-slate-950';
+
+  return (
+    <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center z-[100] p-4 animate-in fade-in duration-300">
+      {/* CAMERA OVERLAY */}
+      {isCameraOpen && (
+        <div className="absolute inset-0 bg-black z-[150] flex flex-col items-center justify-center p-6">
+          <div className="relative w-full max-w-lg aspect-[4/3] bg-slate-900 rounded-3xl overflow-hidden border-4 border-white/10 shadow-2xl">
+            <video 
+              ref={videoRef} 
+              autoPlay 
+              playsInline 
+              className="w-full h-full object-cover"
+            />
+            {/* Mercosul Guide Overlay */}
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div className={`w-3/4 h-1/3 border-4 rounded-xl shadow-[0_0_0_1000px_rgba(0,0,0,0.5)] transition-all duration-500 ${isPlateCentered ? 'border-emerald-500 shadow-[0_0_40px_rgba(16,185,129,0.4)]' : isFocusing ? 'border-white shadow-[0_0_20px_rgba(255,255,255,0.3)]' : isFramingStable ? 'border-amber-400 shadow-[0_0_20px_rgba(251,191,36,0.2)]' : 'border-blue-500/50'}`}>
+                {/* Corner Markers */}
+                <div className={`absolute -top-2 -left-2 w-8 h-8 border-t-4 border-l-4 rounded-tl-lg transition-colors duration-300 ${isPlateCentered ? 'border-emerald-500' : isFocusing ? 'border-white' : isFramingStable ? 'border-amber-400' : 'border-blue-500'}`}></div>
+                <div className={`absolute -top-2 -right-2 w-8 h-8 border-t-4 border-r-4 rounded-tr-lg transition-colors duration-300 ${isPlateCentered ? 'border-emerald-500' : isFocusing ? 'border-white' : isFramingStable ? 'border-amber-400' : 'border-blue-500'}`}></div>
+                <div className={`absolute -bottom-2 -left-2 w-8 h-8 border-b-4 border-l-4 rounded-bl-lg transition-colors duration-300 ${isPlateCentered ? 'border-emerald-500' : isFocusing ? 'border-white' : isFramingStable ? 'border-amber-400' : 'border-blue-500'}`}></div>
+                <div className={`absolute -bottom-2 -right-2 w-8 h-8 border-b-4 border-r-4 rounded-br-lg transition-colors duration-300 ${isPlateCentered ? 'border-emerald-500' : isFocusing ? 'border-white' : isFramingStable ? 'border-amber-400' : 'border-blue-500'}`}></div>
+                
+                {/* Centered Crosshair / Focus Reticle */}
+                <div className={`absolute inset-0 flex items-center justify-center transition-all duration-500 ${isFocusing ? 'opacity-100 scale-110' : isFramingStable ? 'opacity-100 scale-100' : 'opacity-0 scale-90'}`}>
+                  <div className={`w-10 h-10 border-2 rounded-full border-dashed animate-spin-slow ${isPlateCentered ? 'border-emerald-500' : isFocusing ? 'border-white' : 'border-amber-400/50'}`}></div>
+                  <div className={`w-6 h-px absolute ${isPlateCentered ? 'bg-emerald-500' : isFocusing ? 'bg-white' : 'bg-amber-400/50'}`}></div>
+                  <div className={`h-6 w-px absolute ${isPlateCentered ? 'bg-emerald-500' : isFocusing ? 'bg-white' : 'bg-amber-400/50'}`}></div>
+                </div>
+
+                {/* Status Label */}
+                <div className="absolute -top-12 left-1/2 -translate-x-1/2 whitespace-nowrap flex flex-col items-center gap-2">
+                  <span className={`text-[10px] font-black uppercase tracking-[0.3em] px-4 py-1.5 rounded-full shadow-lg transition-all duration-500 ${isPlateCentered ? 'bg-emerald-500 text-white scale-110' : isFocusing ? 'bg-white text-slate-900 animate-pulse' : isFramingStable ? 'bg-amber-500 text-white' : 'bg-blue-500/20 text-blue-400'}`}>
+                    {isPlateCentered ? 'Placa Centralizada' : isFocusing ? 'Ajustando Foco...' : isFramingStable ? 'Enquadramento OK' : 'Buscando Placa...'}
+                  </span>
+                  {(isPlateCentered || isFocusing) && (
+                    <div className="flex gap-1">
+                      <div className={`w-1.5 h-1.5 rounded-full ${isPlateCentered ? 'bg-emerald-500' : 'bg-white'} animate-ping`}></div>
+                      <div className={`w-1.5 h-1.5 rounded-full ${isPlateCentered ? 'bg-emerald-500' : 'bg-white'} animate-ping delay-75`}></div>
+                      <div className={`w-1.5 h-1.5 rounded-full ${isPlateCentered ? 'bg-emerald-500' : 'bg-white'} animate-ping delay-150`}></div>
+                    </div>
+                  )}
+                </div>
+
+                {/* AI Detection Corners (Decorative) */}
+                <div className={`absolute top-4 left-4 w-2 h-2 border-t border-l transition-colors ${isPlateCentered ? 'border-emerald-500' : 'border-white/20'}`}></div>
+                <div className={`absolute top-4 right-4 w-2 h-2 border-t border-r transition-colors ${isPlateCentered ? 'border-emerald-500' : 'border-white/20'}`}></div>
+                <div className={`absolute bottom-4 left-4 w-2 h-2 border-b border-l transition-colors ${isPlateCentered ? 'border-emerald-500' : 'border-white/20'}`}></div>
+                <div className={`absolute bottom-4 right-4 w-2 h-2 border-b border-r transition-colors ${isPlateCentered ? 'border-emerald-500' : 'border-white/20'}`}></div>
+              </div>
+            </div>
+
+            {/* Scanning Animation */}
+            {!isFramingStable && (
+              <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                <div className="absolute top-0 left-0 right-0 h-1 bg-blue-500/50 shadow-[0_0_15px_rgba(59,130,246,0.5)] animate-scanner-line"></div>
+              </div>
+            )}
+          </div>
+          
+          {/* Camera Controls */}
+          <div className="w-full max-w-lg mt-6 space-y-6">
+            {/* Zoom Slider */}
+            {cameraCapabilities?.zoom && (
+              <div className="flex items-center gap-4 bg-white/5 p-4 rounded-2xl border border-white/10">
+                <i className="fas fa-search-minus text-white/40 text-xs"></i>
+                <input 
+                  type="range"
+                  min={cameraCapabilities.zoom.min || 1}
+                  max={cameraCapabilities.zoom.max || 5}
+                  step="0.1"
+                  value={zoom}
+                  onChange={handleZoomChange}
+                  className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                />
+                <i className="fas fa-search-plus text-white/40 text-xs"></i>
+                <span className="text-[10px] font-black text-white w-8 text-right">{zoom.toFixed(1)}x</span>
+              </div>
+            )}
+
+            <div className="flex items-center justify-center gap-8">
+              <button 
+                onClick={stopCamera}
+                className="px-6 h-14 rounded-2xl bg-white/5 text-white flex items-center justify-center gap-2 hover:bg-white/10 transition-all active:scale-90 border border-white/10"
+                title="Cancelar"
+              >
+                <i className="fas fa-times text-sm"></i>
+                <span className="text-[10px] font-black uppercase tracking-widest">Cancelar</span>
+              </button>
+              
+              <button 
+                onClick={captureAndProcess}
+                className={`w-20 h-20 rounded-full flex items-center justify-center shadow-xl transition-all active:scale-90 ${isPlateCentered ? 'bg-emerald-600 shadow-emerald-600/40 scale-110' : isFramingStable ? 'bg-blue-600 shadow-blue-600/40' : 'bg-slate-700 shadow-black/40'}`}
+                title="Capturar Placa"
+              >
+                <div className="w-16 h-16 rounded-full border-4 border-white/30 flex items-center justify-center">
+                  <i className={`fas fa-camera text-2xl text-white ${isPlateCentered ? 'animate-pulse' : ''}`}></i>
+                </div>
+              </button>
+
+              <button 
+                onClick={triggerAutoFocus}
+                className="group relative w-14 h-14 rounded-2xl bg-white/5 text-white flex flex-col items-center justify-center hover:bg-white/10 transition-all active:scale-90"
+                title="Re-focar"
+              >
+                <i className="fas fa-expand text-lg group-hover:scale-110 transition-transform"></i>
+                <span className="absolute -bottom-8 text-[7px] font-black uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity">Auto-Foco</span>
+              </button>
+            </div>
+          </div>
+          
+          <p className="mt-8 text-white/40 font-black uppercase text-[9px] tracking-[0.4em]">Centralize a placa para melhor precisão</p>
+        </div>
+      )}
+
+      {/* PRISMA SCANNER OVERLAY */}
+      {isPrismaScannerOpen && (
+        <PrismaScanner 
+          onScan={handlePrismaScan}
+          onClose={() => setIsPrismaScannerOpen(false)}
+          isDarkMode={isDarkMode}
+        />
+      )}
+
+      {/* HIDDEN CANVAS FOR CAPTURE */}
+      <canvas ref={canvasRef} className="hidden" />
+
+      {showConfirmExit && (
+        <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-md flex items-center justify-center z-[110] p-6 animate-in fade-in zoom-in-95 duration-200">
+           <div className={`${isDarkMode ? 'bg-[#161922] border-white/10' : 'bg-white border-slate-200'} p-8 rounded-3xl border max-w-sm w-full shadow-2xl`}>
+              <div className="w-12 h-12 bg-red-500/10 text-red-500 rounded-2xl flex items-center justify-center mb-6 mx-auto">
+                <i className="fas fa-sign-out-alt text-xl"></i>
+              </div>
+              <h4 className={`text-xl font-black mb-2 uppercase text-center ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Registrar Saída Manual</h4>
+              <p className="text-slate-500 text-sm mb-8 text-center">Defina o horário de saída para liberar a vaga.</p>
+              
+              <div className="flex flex-col gap-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Data</label>
+                    <input 
+                      type="date" 
+                      className={`h-11 px-4 rounded-xl border font-bold text-xs outline-none transition-all focus:ring-2 focus:ring-red-500/20 ${isDarkMode ? 'bg-white/5 border-white/10 text-white' : 'bg-slate-50 border-slate-200 text-slate-800'}`}
+                      value={manualExitDate}
+                      onChange={e => setManualExitDate(e.target.value)}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Hora</label>
+                    <input 
+                      type="time" 
+                      className={`h-11 px-4 rounded-xl border font-bold text-xs outline-none transition-all focus:ring-2 focus:ring-red-500/20 ${isDarkMode ? 'bg-white/5 border-white/10 text-white' : 'bg-slate-50 border-slate-200 text-slate-800'}`}
+                      value={manualExitTime}
+                      onChange={e => setManualExitTime(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Motivo da Ociosidade (Opcional)</label>
+                    <textarea 
+                      className={`p-4 rounded-xl border font-bold text-xs outline-none transition-all focus:ring-2 focus:ring-blue-500/20 h-20 resize-none ${isDarkMode ? 'bg-white/5 border-white/10 text-white' : 'bg-slate-50 border-slate-200 text-slate-800'}`}
+                      placeholder="Ex: Fila de espera, manutenção, reserva..."
+                      value={idleReason}
+                      onChange={e => setIdleReason(e.target.value)}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Ações Tomadas (Opcional)</label>
+                    <textarea 
+                      className={`p-4 rounded-xl border font-bold text-xs outline-none transition-all focus:ring-2 focus:ring-blue-500/20 h-20 resize-none ${isDarkMode ? 'bg-white/5 border-white/10 text-white' : 'bg-slate-50 border-slate-200 text-slate-800'}`}
+                      placeholder="Ex: Contatado gestor, priorizado reparo..."
+                      value={idleActions}
+                      onChange={e => setIdleActions(e.target.value)}
+                    />
+                  </div>
+                </div>
+                
+                <div className="flex flex-col gap-2 mt-2">
+                  <button 
+                    onClick={() => { 
+                      let exitISO = undefined;
+                      if (manualExitDate && manualExitTime) {
+                        exitISO = new Date(`${manualExitDate}T${manualExitTime}`).toISOString();
+                      }
+                      onRemove?.(formData.id!, exitISO, idleReason, idleActions); 
+                      setShowConfirmExit(false); 
+                    }} 
+                    className="h-12 bg-red-600 text-white rounded-xl font-black uppercase text-[11px] hover:bg-red-700 transition-all active:scale-95 shadow-lg shadow-red-600/20"
+                  >
+                    Registrar Saída
+                  </button>
+                  <button 
+                    onClick={() => setShowConfirmExit(false)} 
+                    className={`h-12 rounded-xl font-black uppercase text-[11px] transition-colors ${isDarkMode ? 'bg-white/5 text-slate-400 hover:bg-white/10' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+           </div>
+        </div>
+      )}
+
+      <div className={`${isDarkMode ? 'bg-[#0F1117] border-white/10' : 'bg-white border-slate-200'} rounded-[2.5rem] shadow-2xl w-full max-w-3xl overflow-hidden border relative animate-in zoom-in-95 duration-300 flex flex-col md:flex-row max-h-[95vh] md:max-h-[90vh]`}>
+        
+        {/* TAG LATERAL - IDENTIFICAÇÃO PREMIUM */}
+        <div 
+          className={`w-full md:w-24 shrink-0 flex md:flex-col items-center justify-between p-6 md:py-12 transition-all duration-500 border-b md:border-b-0 md:border-r relative ${isDarkMode ? 'border-white/5' : 'border-slate-100'}`}
+          style={{ backgroundColor: prismaColor }}
+        >
+          <div className="absolute inset-0 bg-gradient-to-br from-white/30 to-transparent pointer-events-none opacity-40"></div>
+          
+          {/* Prisma Number */}
+          <div className={`flex flex-col items-center z-10 ${textColor}`}>
+            <span className="text-[8px] font-black uppercase tracking-[0.3em] opacity-60 leading-none mb-2">Prisma</span>
+            <span className="text-4xl font-black leading-none tabular-nums drop-shadow-md">{prismaNumber || '--'}</span>
+          </div>
+          
+          {/* Consultant Info */}
+          <div className={`flex flex-col items-center z-10 md:my-10 ${textColor}`}>
+            <div className={`hidden md:block h-px w-8 mb-8 opacity-20 ${isDarkText ? 'bg-black' : 'bg-white'}`}></div>
+            <span className="text-[8px] font-black uppercase tracking-[0.3em] opacity-60 leading-none mb-2">Consultor</span>
+            <span className="text-lg font-black tracking-tighter drop-shadow-sm">#{consultantInfo.number}</span>
+          </div>
+
+          {/* Vertical Name */}
+          <div className="hidden md:flex items-center justify-center z-10 h-64 relative">
+            <span className={`text-[15px] font-black uppercase -rotate-90 origin-center whitespace-nowrap tracking-[0.6em] drop-shadow-lg transition-all duration-500 ${textColor}`}>
+              {consultantInfo.firstName}
+            </span>
+          </div>
+
+          {/* Mobile Name */}
+          <div className="md:hidden flex flex-col items-end z-10">
+            <span className={`text-[12px] font-black uppercase tracking-[0.25em] drop-shadow-sm ${textColor}`}>{consultantInfo.firstName}</span>
+            <span className={`text-[9px] font-black opacity-40 uppercase tracking-tighter ${textColor}`}>#{formData.id?.slice(0, 4)}</span>
+          </div>
+        </div>
+
+        <div className="flex-1 flex flex-col min-w-0 bg-inherit overflow-hidden">
+          {/* Header */}
+          <div className={`px-10 py-8 border-b flex justify-between items-center ${isDarkMode ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50/50 border-slate-100'}`}>
+            <div>
+              <div className="flex items-center gap-3 mb-1">
+                <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
+                <h3 className={`text-2xl font-black tracking-tighter uppercase ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                  {getSlotDisplayName(slotIndex)}
+                </h3>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20">
+                  <i className="fas fa-fingerprint text-[9px] text-blue-500"></i>
+                  <span className="text-[10px] text-blue-500 font-black uppercase tracking-widest">{formData.id}</span>
+                </div>
+                {formData.registrationTime && (
+                  <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20">
+                    <i className="fas fa-calendar-check text-[9px] text-emerald-500"></i>
+                    <span className="text-[10px] text-emerald-500 font-black uppercase tracking-widest">
+                      Registrado: {new Date(formData.registrationTime).toLocaleString('pt-BR', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+            <button 
+              onClick={onClose} 
+              className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all active:scale-90 ${isDarkMode ? 'bg-white/5 text-slate-500 hover:bg-white/10 hover:text-white' : 'bg-slate-100 text-slate-400 hover:bg-red-50 hover:text-red-500 shadow-sm'}`}
+            >
+              <i className="fas fa-times text-lg"></i>
+            </button>
+          </div>
+
+          {/* SLA Monitor */}
+          {existingVehicle && sla && (
+            <div className={`px-10 py-6 border-b flex flex-col gap-3 ${isDarkMode ? 'bg-white/[0.01] border-white/5' : 'bg-white border-slate-100'}`}>
+              <div className="flex justify-between items-end">
+                <div className="flex flex-col gap-1">
+                  <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em]">{sla.label}</span>
+                  <div className="flex items-center gap-2">
+                    <i className={`fas fa-clock ${sla.colorClass} text-sm animate-pulse`}></i>
+                    <span className={`text-2xl font-black tabular-nums tracking-tighter ${sla.colorClass}`}>{sla.formatted}</span>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Tempo de Estadia</span>
+                </div>
+              </div>
+              <div className={`w-full h-2 rounded-full overflow-hidden ${isDarkMode ? 'bg-white/5' : 'bg-slate-100'}`}>
+                <div 
+                  className={`h-full rounded-full transition-all duration-1000 ${sla.barColor} shadow-[0_0_10px_rgba(0,0,0,0.1)]`}
+                  style={{ width: `${sla.progress}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Form Content */}
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-10">
+            <form onSubmit={handleSubmit} className="space-y-10">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="space-y-3">
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Placa / ID do Veículo/Equipamento</label>
+                  <div className="relative group flex gap-2">
+                    <div className="relative flex-1">
+                      <i className="fas fa-id-card absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 text-sm transition-colors group-focus-within:text-blue-500"></i>
+                      <input 
+                        type="text" 
+                        placeholder="ABC-1234" 
+                        className={`w-full h-14 pl-12 pr-5 rounded-2xl border-2 font-black uppercase transition-all outline-none focus:ring-4 focus:ring-blue-500/10 ${errors.plate ? 'border-red-500 focus:border-red-500 focus:ring-red-500/10' : (isDarkMode ? 'bg-white/5 border-white/5 text-white focus:border-blue-500/50' : 'bg-white border-slate-100 text-slate-800 focus:border-blue-500 shadow-sm')}`} 
+                        value={formData.plate || ''} 
+                        onChange={e => {
+                          const val = e.target.value.toUpperCase();
+                          setFormData({ ...formData, plate: val });
+                          validateField('plate', val);
+                        }} 
+                      />
+                    </div>
+                    <button 
+                      type="button"
+                      onClick={startCamera}
+                      disabled={isProcessingAI}
+                      className={`w-14 h-14 shrink-0 rounded-2xl flex items-center justify-center transition-all active:scale-90 ${isProcessingAI ? 'bg-slate-500/20 text-slate-500' : 'bg-blue-600 text-white shadow-lg shadow-blue-600/20 hover:bg-blue-500'}`}
+                      title="Tirar foto da placa"
+                    >
+                      {isProcessingAI ? (
+                        <i className="fas fa-circle-notch animate-spin"></i>
+                      ) : (
+                        <i className="fas fa-camera"></i>
+                      )}
+                    </button>
+                  </div>
+                  {errors.plate && (
+                    <p className="text-[9px] font-black text-red-500 uppercase tracking-widest ml-1 animate-pulse">{errors.plate}</p>
+                  )}
+                  {cameraError && (
+                    <p className="text-[9px] font-black text-red-500 uppercase tracking-widest ml-1 animate-pulse">{cameraError}</p>
+                  )}
+                </div>
+                <div className="space-y-3">
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Modelo / Descrição</label>
+                  <div className="relative group">
+                    <i className="fas fa-car absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 text-sm transition-colors group-focus-within:text-blue-500"></i>
+                    <input 
+                      list="porsche-models" 
+                      placeholder="Selecione o modelo ou descreva o equipamento" 
+                      className={`w-full h-14 pl-12 pr-5 rounded-2xl border-2 font-bold transition-all outline-none focus:ring-4 focus:ring-blue-500/10 ${errors.model ? 'border-red-500 focus:border-red-500 focus:ring-red-500/10' : (isDarkMode ? 'bg-white/5 border-white/5 text-white focus:border-blue-500/50' : 'bg-white border-slate-100 text-slate-800 focus:border-blue-500 shadow-sm')}`} 
+                      value={formData.model || ''} 
+                      onChange={e => {
+                        const val = e.target.value;
+                        setFormData({ ...formData, model: val });
+                        validateField('model', val);
+                      }} 
+                    />
+                    <datalist id="porsche-models">{PORSCHE_MODELS.map(m => <option key={m} value={m} />)}</datalist>
+                  </div>
+                  {errors.model && (
+                    <p className="text-[9px] font-black text-red-500 uppercase tracking-widest ml-1 animate-pulse">{errors.model}</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <label className="block text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Proprietário / Cliente</label>
+                <div className="relative group">
+                  <i className="fas fa-user absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 text-sm transition-colors group-focus-within:text-blue-500"></i>
+                  <input 
+                    type="text" 
+                    placeholder="Nome completo do cliente" 
+                    className={`w-full h-14 pl-12 pr-5 rounded-2xl border-2 font-bold transition-all outline-none focus:ring-4 focus:ring-blue-500/10 ${errors.customer ? 'border-red-500 focus:border-red-500 focus:ring-red-500/10' : (isDarkMode ? 'bg-white/5 border-white/5 text-white focus:border-blue-500/50' : 'bg-white border-slate-100 text-slate-800 focus:border-blue-500 shadow-sm')}`} 
+                    value={formData.customer || ''} 
+                    onChange={e => {
+                      const val = e.target.value;
+                      setFormData({ ...formData, customer: val });
+                      validateField('customer', val);
+                    }} 
+                  />
+                </div>
+                {errors.customer && (
+                  <p className="text-[9px] font-black text-red-500 uppercase tracking-widest ml-1 animate-pulse">{errors.customer}</p>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between ml-1">
+                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Número Prisma</label>
+                    <button 
+                      type="button"
+                      onClick={() => setIsPrismaScannerOpen(true)}
+                      className="text-[9px] font-black text-blue-500 uppercase tracking-widest flex items-center gap-2 hover:text-blue-400 transition-colors"
+                    >
+                      <i className="fas fa-qrcode"></i> Escanear Prisma
+                    </button>
+                  </div>
+                  <div className="relative group">
+                    <i className="fas fa-tag absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 text-sm transition-colors group-focus-within:text-blue-500"></i>
+                    <input 
+                      type="number" 
+                      placeholder="00" 
+                      className={`w-full h-14 pl-12 pr-5 rounded-2xl border-2 font-black transition-all outline-none focus:ring-4 focus:ring-blue-500/10 ${errors.prismaNumber ? 'border-red-500 focus:border-red-500 focus:ring-red-500/10' : (isDarkMode ? 'bg-white/5 border-white/5 text-white focus:border-blue-500/50' : 'bg-white border-slate-200 text-slate-800 focus:border-blue-500 shadow-sm')}`} 
+                      value={formData.prisma?.number || ''} 
+                      onChange={e => {
+                        const val = parseInt(e.target.value) || 0;
+                        const nextData = { ...formData, prisma: { color: formData.prisma?.color || PRISMA_COLORS[0].hex, number: val } };
+                        setFormData(nextData);
+                        validateField('prismaNumber', val, nextData);
+                      }} 
+                    />
+                  </div>
+                  {errors.prismaNumber && (
+                    <p className="text-[9px] font-black text-red-500 uppercase tracking-widest ml-1 animate-pulse">{errors.prismaNumber}</p>
+                  )}
+                </div>
+                <div className="space-y-4">
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Cor do Prisma</label>
+                  <div className={`flex items-center h-14 gap-2 px-3 rounded-2xl border-2 transition-all ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}>
+                    {PRISMA_COLORS.map(c => (
+                      <button 
+                        key={c.hex} 
+                        type="button" 
+                        title={c.name}
+                        onClick={() => setFormData({ ...formData, prisma: { color: c.hex, number: formData.prisma?.number || 0 } })} 
+                        className={`w-8 h-8 rounded-full border-2 shrink-0 transition-all hover:scale-110 active:scale-90 relative ${formData.prisma?.color === c.hex ? 'border-white ring-2 ring-blue-500 shadow-lg z-10' : 'border-transparent opacity-60 hover:opacity-100'}`} 
+                        style={{ backgroundColor: c.hex }}
+                      >
+                        {formData.prisma?.color === c.hex && (
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <i className={`fas fa-check text-[10px] ${getContrastColor(c.hex).includes('slate-950') ? 'text-slate-950' : 'text-white'}`}></i>
+                          </div>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="space-y-3">
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Tipo de Serviço</label>
+                  <div className="relative">
+                    <select 
+                      className={`w-full h-14 px-5 rounded-2xl border-2 font-bold transition-all outline-none appearance-none focus:ring-4 focus:ring-blue-500/10 ${errors.service ? 'border-red-500 focus:border-red-500 focus:ring-red-500/10' : (isDarkMode ? 'bg-[#1A1D26] border-white/5 text-white focus:border-blue-500/50' : 'bg-slate-50 border-slate-100 text-slate-800 focus:border-blue-500 shadow-sm')}`} 
+                      value={formData.service} 
+                      onChange={e => {
+                        const val = e.target.value;
+                        setFormData({ ...formData, service: val });
+                        validateField('service', val);
+                      }}
+                    >
+                      {WORKSHOP_SERVICES.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                    <i className="fas fa-chevron-down absolute right-5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none text-xs"></i>
+                  </div>
+                  {errors.service && (
+                    <p className="text-[9px] font-black text-red-500 uppercase tracking-widest ml-1 animate-pulse">{errors.service}</p>
+                  )}
+                </div>
+                <div className="space-y-3">
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Consultor Responsável</label>
+                  <div className="relative">
+                    <select 
+                      className={`w-full h-14 px-5 rounded-2xl border-2 font-bold transition-all outline-none appearance-none focus:ring-4 focus:ring-blue-500/10 ${errors.consultant ? 'border-red-500 focus:border-red-500 focus:ring-red-500/10' : (isDarkMode ? 'bg-[#1A1D26] border-white/5 text-white focus:border-blue-500/50' : 'bg-slate-50 border-slate-100 text-slate-800 focus:border-blue-500 shadow-sm')}`} 
+                      value={formData.consultant || ''} 
+                      onChange={e => {
+                        const val = e.target.value as ConsultantName;
+                        setFormData({ ...formData, consultant: val });
+                        validateField('consultant', val);
+                      }}
+                    >
+                      <option value="" disabled>Selecione o Consultor</option>
+                      {CONSULTANTS.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <i className="fas fa-chevron-down absolute right-5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none text-xs"></i>
+                  </div>
+                  {errors.consultant && (
+                    <p className="text-[9px] font-black text-red-500 uppercase tracking-widest ml-1 animate-pulse">{errors.consultant}</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="space-y-3">
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Status de Lavagem / Preparação</label>
+                  <div className="relative">
+                    <select 
+                      className={`w-full h-14 px-5 rounded-2xl border-2 font-bold transition-all outline-none appearance-none focus:ring-4 focus:ring-blue-500/10 ${errors.washStatus ? 'border-red-500 focus:border-red-500 focus:ring-red-500/10' : (isDarkMode ? 'bg-[#1A1D26] border-white/5 text-white focus:border-blue-500/50' : 'bg-slate-50 border-slate-100 text-slate-800 focus:border-blue-500 shadow-sm')}`} 
+                      value={formData.washStatus} 
+                      onChange={e => {
+                        const val = e.target.value as WashStatus;
+                        const nextData = { ...formData, washStatus: val };
+                        setFormData(nextData);
+                        validateField('washStatus', val, nextData);
+                        validateField('deliveryStatus', formData.deliveryStatus, nextData);
+                      }}
+                    >
+                      {WASH_STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                    <i className="fas fa-chevron-down absolute right-5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none text-xs"></i>
+                  </div>
+                  {errors.washStatus && (
+                    <p className="text-[9px] font-black text-red-500 uppercase tracking-widest ml-1 animate-pulse">{errors.washStatus}</p>
+                  )}
+                </div>
+
+                <div className="space-y-3">
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Status de Entrega</label>
+                  <div className="relative">
+                    <select 
+                      className={`w-full h-14 px-5 rounded-2xl border-2 font-bold transition-all outline-none appearance-none focus:ring-4 focus:ring-blue-500/10 ${errors.deliveryStatus ? 'border-red-500 focus:border-red-500 focus:ring-red-500/10' : (isDarkMode ? 'bg-[#1A1D26] border-white/5 text-white focus:border-blue-500/50' : 'bg-slate-50 border-slate-100 text-slate-800 focus:border-blue-500 shadow-sm')}`} 
+                      value={formData.deliveryStatus} 
+                      onChange={e => {
+                        const val = e.target.value as DeliveryStatus;
+                        setFormData({ ...formData, deliveryStatus: val });
+                        validateField('deliveryStatus', val);
+                      }}
+                    >
+                      {DELIVERY_STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                    <i className="fas fa-chevron-down absolute right-5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none text-xs"></i>
+                  </div>
+                  {errors.deliveryStatus && (
+                    <p className="text-[9px] font-black text-red-500 uppercase tracking-widest ml-1 animate-pulse">{errors.deliveryStatus}</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex flex-col md:flex-row gap-5 pt-6">
+                {existingVehicle && (
+                  <button 
+                    type="button" 
+                    onClick={handleOpenConfirmExit} 
+                    className={`flex-1 h-16 rounded-[1.25rem] font-black uppercase text-[11px] tracking-[0.2em] transition-all active:scale-95 border-2 flex items-center justify-center gap-3 ${isDarkMode ? 'border-red-500/30 text-red-500 hover:bg-red-500/10' : 'border-red-500 text-red-500 hover:bg-red-50 shadow-sm'}`}
+                  >
+                    <i className="fas fa-sign-out-alt text-sm"></i> Registrar Saída Manual
+                  </button>
+                )}
+                <button 
+                  type="submit" 
+                  className="flex-[2] h-16 bg-blue-600 text-white rounded-[1.25rem] font-black uppercase text-[11px] tracking-[0.2em] shadow-2xl shadow-blue-600/30 hover:bg-blue-500 transition-all active:scale-95 flex items-center justify-center gap-3"
+                >
+                  <i className="fas fa-check-circle text-sm"></i> {existingVehicle ? 'Salvar Alterações' : 'Confirmar Registro'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default VehicleForm;

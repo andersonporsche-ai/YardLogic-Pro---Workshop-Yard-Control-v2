@@ -1,0 +1,7 @@
+{
+  "name": "YardLogic Pro - Workshop Yard Control",
+  "description": "A professional yard logistics and workshop management system with real-time tracking, Prisma identification, consultant assignment, and AI-powered insights.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
