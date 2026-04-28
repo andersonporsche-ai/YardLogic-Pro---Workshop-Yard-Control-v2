@@ -81,6 +81,7 @@ export interface Vehicle {
   washStatus: WashStatus;
   deliveryStatus: DeliveryStatus;
   slotIndex: number; // 0-n
+  yardId: string;
 }
 
 export interface User {

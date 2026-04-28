@@ -133,8 +133,15 @@ const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const [isResettingPassword, setIsResettingPassword] = useState(false);
+
   // Auth Effect
   useEffect(() => {
+    // Explicitly check for password recovery hash on mount
+    if (window.location.hash && window.location.hash.includes('type=recovery')) {
+      setIsResettingPassword(true);
+    }
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
         // Fetch profile
@@ -152,6 +159,22 @@ const App: React.FC = () => {
               fingerprintEnabled: profile?.fingerprint_enabled || false,
               createdAt: session.user.created_at
             });
+          })
+          .catch(err => {
+            console.error('Erro ao buscar perfil inicial:', err);
+            // Fallback user state
+            if (session?.user) {
+              setCurrentUser({
+                id: session.user.id,
+                name: session.user.email?.split('@')[0] || 'Usuário',
+                email: session.user.email || '',
+                recoveryEmail: '',
+                fingerprintEnabled: false,
+                createdAt: session.user.created_at
+              });
+            }
+          })
+          .finally(() => {
             setLoading(false);
           });
       } else {
@@ -159,7 +182,13 @@ const App: React.FC = () => {
       }
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        setIsResettingPassword(true);
+      } else if (event === 'SIGNED_IN') {
+        setIsResettingPassword(false);
+      }
+
       if (session?.user) {
         supabase
           .from('profiles')
@@ -175,6 +204,9 @@ const App: React.FC = () => {
               fingerprintEnabled: profile?.fingerprint_enabled || false,
               createdAt: session.user.created_at
             });
+          })
+          .catch(err => {
+            console.error('Erro no onAuthStateChange profile:', err);
           });
       } else {
         setCurrentUser(null);
@@ -318,6 +350,29 @@ const App: React.FC = () => {
     localStorage.setItem('yard_theme_mode', themeMode);
   }, [themeMode, now]);
 
+  // Sync to localStorage as a cache/backup
+  useEffect(() => {
+    localStorage.setItem('yard_vehicles', JSON.stringify(vehicles));
+    localStorage.setItem('yard_vehicles_2', JSON.stringify(vehicles2));
+    localStorage.setItem('yard_vehicles_3', JSON.stringify(vehicles3));
+    localStorage.setItem('yard_vehicles_4', JSON.stringify(vehicles4));
+    localStorage.setItem('yard_vehicles_p1', JSON.stringify(vehiclesP1));
+    localStorage.setItem('yard_vehicles_p2', JSON.stringify(vehiclesP2));
+    localStorage.setItem('yard_vehicles_p6', JSON.stringify(vehiclesP6));
+    localStorage.setItem('yard_vehicles_cob', JSON.stringify(vehiclesCob));
+  }, [vehicles, vehicles2, vehicles3, vehicles4, vehiclesP1, vehiclesP2, vehiclesP6, vehiclesCob]);
+
+  useEffect(() => {
+    localStorage.setItem('yard_activity_logs', JSON.stringify(logs));
+    localStorage.setItem('yard_activity_logs_2', JSON.stringify(logs2));
+    localStorage.setItem('yard_activity_logs_3', JSON.stringify(logs3));
+    localStorage.setItem('yard_activity_logs_4', JSON.stringify(logs4));
+    localStorage.setItem('yard_activity_logs_p1', JSON.stringify(logsP1));
+    localStorage.setItem('yard_activity_logs_p2', JSON.stringify(logsP2));
+    localStorage.setItem('yard_activity_logs_p6', JSON.stringify(logsP6));
+    localStorage.setItem('yard_activity_logs_cob', JSON.stringify(logsCob));
+  }, [logs, logs2, logs3, logs4, logsP1, logsP2, logsP6, logsCob]);
+
   useEffect(() => {
     localStorage.setItem('yard_slot_empty_since', JSON.stringify(slotEmptySince));
   }, [slotEmptySince]);
@@ -457,6 +512,88 @@ const App: React.FC = () => {
     }
   };
 
+  // Realtime Subscriptions
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const channel = supabase
+      .channel('vehicles_realtime_changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'vehicles' },
+        (payload) => {
+          const eventType = payload.eventType;
+          const newDoc = payload.new as Record<string, unknown>;
+          const oldDoc = payload.old as Record<string, unknown>;
+
+          if (eventType === 'INSERT' || eventType === 'UPDATE') {
+            const vehicle = databaseService.mapVehicleFromDb(newDoc as Parameters<typeof databaseService.mapVehicleFromDb>[0]);
+            const yardId = vehicle.yardId;
+
+            // 1. Update State Sync
+            const updater = (prev: Vehicle[]) => {
+              // If it's an exit, remove from active list
+              if (vehicle.exitTime) return prev.filter(v => v.id !== vehicle.id);
+              
+              const exists = prev.some(v => v.id === vehicle.id);
+              if (exists) {
+                return prev.map(v => v.id === vehicle.id ? vehicle : v);
+              }
+              return [...prev, vehicle];
+            };
+
+            if (yardId === 'yard') setVehicles(updater);
+            else if (yardId === 'yard2') setVehicles2(updater);
+            else if (yardId === 'yard3') setVehicles3(updater);
+            else if (yardId === 'yard4') setVehicles4(updater);
+            else if (yardId === 'yardP1') setVehiclesP1(updater);
+            else if (yardId === 'yardP2') setVehiclesP2(updater);
+            else if (yardId === 'yardP6') setVehiclesP6(updater);
+            else if (yardId === 'yardCob') setVehiclesCob(updater);
+
+            // 2. Notification Logic for 'Veículo Pronto'
+            // Trigger if it's an UPDATE and status changed to Ready, or a new record already in Ready state
+            const isNowReady = vehicle.washStatus === 'Veículo Pronto' && (
+              eventType === 'INSERT' || 
+              (eventType === 'UPDATE' && oldDoc && oldDoc.wash_status !== 'Veículo Pronto')
+            );
+
+            if (isNowReady) {
+              const isConsultant = currentUser.name.toLowerCase() === vehicle.consultant?.toLowerCase();
+              const slotName = vehicle.slotIndex + 1;
+              const yardLabel = yardOptions.find(y => y.id === yardId)?.label || 'Pátio';
+              
+              addToast({
+                title: isConsultant ? 'Seu Veículo está Pronto!' : 'Veículo Pronto para Entrega',
+                message: `O veículo ${vehicle.model} (${vehicle.plate}) na vaga ${slotName} (${yardLabel}) está pronto para entrega.`,
+                type: 'success'
+              });
+
+              if (notificationPermission === 'granted') {
+                try {
+                  const notificationTitle = isConsultant ? '🏁 Seu Veículo está Pronto!' : '🏁 Veículo Pronto: ' + vehicle.plate;
+                  const notificationBody = `${vehicle.model} • Vaga ${slotName} (${yardLabel})\nStatus: PRONTO PARA ENTREGA${isConsultant ? '\nFavor entrar em contato com o cliente.' : ''}`;
+                  
+                  new Notification(notificationTitle, {
+                    body: notificationBody,
+                    icon: 'https://cdn-icons-png.flaticon.com/512/1165/1165936.png',
+                    tag: `ready-${vehicle.id}`
+                  });
+                } catch (e) {
+                  console.error('Realtime notification error:', e);
+                }
+              }
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [currentUser, yardOptions, addToast, notificationPermission]);
+
   const cycleTheme = () => {
     const modes: ThemeMode[] = ['auto', 'light', 'dark'];
     const currentIndex = modes.indexOf(themeMode);
@@ -566,48 +703,73 @@ const App: React.FC = () => {
   };
 
   const handleSaveVehicle = async (vehicle: Vehicle) => {
-    // Determine target based on which yard contains the vehicle
-    let targetYardId: YardTab | null = null;
-    const yardPools: { id: YardTab, vehicles: Vehicle[] }[] = [
-      { id: 'yard', vehicles: vehicles },
-      { id: 'yard2', vehicles: vehicles2 },
-      { id: 'yard3', vehicles: vehicles3 },
-      { id: 'yard4', vehicles: vehicles4 },
-      { id: 'yardP1', vehicles: vehiclesP1 },
-      { id: 'yardP2', vehicles: vehiclesP2 },
-      { id: 'yardP6', vehicles: vehiclesP6 },
-      { id: 'yardCob', vehicles: vehiclesCob },
+    // 1. Identify which yard this vehicle belongs to
+    const yardPools = [
+      { id: 'yard', vehicles: vehicles, setter: setVehicles, logSetter: setLogs },
+      { id: 'yard2', vehicles: vehicles2, setter: setVehicles2, logSetter: setLogs2 },
+      { id: 'yard3', vehicles: vehicles3, setter: setVehicles3, logSetter: setLogs3 },
+      { id: 'yard4', vehicles: vehicles4, setter: setVehicles4, logSetter: setLogs4 },
+      { id: 'yardP1', vehicles: vehiclesP1, setter: setVehiclesP1, logSetter: setLogsP1 },
+      { id: 'yardP2', vehicles: vehiclesP2, setter: setVehiclesP2, logSetter: setLogsP2 },
+      { id: 'yardP6', vehicles: vehiclesP6, setter: setVehiclesP6, logSetter: setLogsP6 },
+      { id: 'yardCob', vehicles: vehiclesCob, setter: setVehiclesCob, logSetter: setLogsCob },
     ];
 
     const currentInPool = yardPools.find(p => p.vehicles.some(v => v.id === vehicle.id));
-    targetYardId = currentInPool ? currentInPool.id : (activeTab === 'dashboard' || activeTab === 'tasks' ? 'yard' : activeTab);
+    const targetId = currentInPool ? currentInPool.id : (activeTab === 'dashboard' || activeTab === 'tasks' ? 'yard' : activeTab);
+    const targetYardId = targetId as YardTab;
 
     try {
-      await databaseService.saveVehicle(vehicle, targetYardId as string);
+      await databaseService.saveVehicle(vehicle, targetYardId);
     } catch (error) {
       console.error('Erro ao salvar no Supabase:', error);
-      addToast({ title: 'Erro de Sincronização', message: 'Dados guardados localmente, mas falharam ao enviar ao servidor.', type: 'error' });
+      addToast({ 
+        title: 'Sincronização Pendente', 
+        message: 'Dados salvos localmente, mas falharam ao enviar ao servidor.', 
+        type: 'warning' 
+      });
     }
 
-    const targetVehicles = targetYardId === 'yardCob' ? vehiclesCob : (targetYardId === 'yardP6' ? vehiclesP6 : (targetYardId === 'yardP2' ? vehiclesP2 : (targetYardId === 'yardP1' ? vehiclesP1 : (targetYardId === 'yard4' ? vehicles4 : (targetYardId === 'yard3' ? vehicles3 : (targetYardId === 'yard2' ? vehicles2 : vehicles))))));
-    const setTargetVehicles = targetYardId === 'yardCob' ? setVehiclesCob : (targetYardId === 'yardP6' ? setVehiclesP6 : (targetYardId === 'yardP2' ? setVehiclesP2 : (targetYardId === 'yardP1' ? setVehiclesP1 : (targetYardId === 'yard4' ? setVehicles4 : (targetYardId === 'yard3' ? setVehicles3 : (targetYardId === 'yard2' ? setVehicles2 : setVehicles))))));
-    const setTargetLogs = targetYardId === 'yardCob' ? setLogsCob : (targetYardId === 'yardP6' ? setLogsP6 : (targetYardId === 'yardP2' ? setLogsP2 : (targetYardId === 'yardP1' ? setLogsP1 : (targetYardId === 'yard4' ? setLogs4 : (targetYardId === 'yard3' ? setLogs3 : (targetYardId === 'yard2' ? setLogs2 : setLogs))))));
-
-    const existingIdx = targetVehicles.findIndex(v => v.id === vehicle.id);
     const nowISO = new Date().toISOString();
+    const existingVehicle = currentInPool?.vehicles.find(v => v.id === vehicle.id);
+    const exists = !!existingVehicle;
     
-    if (existingIdx !== -1 && (targetVehicles[existingIdx].washStatus !== vehicle.washStatus || targetVehicles[existingIdx].deliveryStatus !== vehicle.deliveryStatus)) {
+    if (exists && existingVehicle && (existingVehicle.washStatus !== vehicle.washStatus || existingVehicle.deliveryStatus !== vehicle.deliveryStatus)) {
       vehicle.statusChangedAt = nowISO;
       setNotifiedVehicleIds(prev => {
         const next = new Set(prev);
         next.delete(vehicle.id);
         return next;
       });
-    } else if (existingIdx === -1) {
+
+      // Notification for 'Veículo Pronto'
+      if (vehicle.washStatus === 'Veículo Pronto' && existingVehicle.washStatus !== 'Veículo Pronto') {
+        const slotName = vehicle.slotIndex + 1;
+        const yardName = getYardName(targetYardId);
+        const consultantInfo = vehicle.consultant ? ` (Consultor: ${vehicle.consultant})` : '';
+        
+        addToast({
+          title: 'Status: Veículo Pronto',
+          message: `O veículo ${vehicle.model} (${vehicle.plate}) na vaga ${slotName} no ${yardName} agora está pronto.${consultantInfo}`,
+          type: 'success'
+        });
+      }
+    } else if (!exists) {
       vehicle.statusChangedAt = nowISO;
+      
+      // Also notify if created directly as Ready
+      if (vehicle.washStatus === 'Veículo Pronto') {
+        const slotName = vehicle.slotIndex + 1;
+        const yardName = getYardName(targetYardId);
+        
+        addToast({
+          title: 'Veículo Pronto Registrado',
+          message: `Novo veículo ${vehicle.model} (${vehicle.plate}) na vaga ${slotName} (${yardName}) já está PRONTO.`,
+          type: 'success'
+        });
+      }
     }
 
-    const exists = existingIdx !== -1;
     const logAction: 'entry' | 'status_change' | 'exit' = exists ? 'status_change' : 'entry';
     const logDetails = exists 
       ? `Atualização: ${vehicle.washStatus} | ${vehicle.deliveryStatus}` 
@@ -625,109 +787,131 @@ const App: React.FC = () => {
       action: logAction,
       timestamp: nowISO,
       details: logDetails,
-      yardId: targetYardId as string,
-      yardName: getYardName(targetYardId as string)
+      yardId: targetYardId,
+      yardName: getYardName(targetYardId)
     };
 
-    databaseService.saveLog(newLog, targetYardId as string).catch(console.error);
+    databaseService.saveLog(newLog, targetYardId).catch(console.error);
 
-    setTargetLogs(prev => [newLog, ...prev]);
-    if (exists) {
-      const newVehicles = [...targetVehicles];
-      newVehicles[existingIdx] = vehicle;
-      setTargetVehicles(newVehicles);
-    } else {
-      setTargetVehicles([...targetVehicles, vehicle]);
-      // Remove from empty slots tracking
-      setSlotEmptySince(prev => {
-        const next = { ...prev };
-        if (next[activeTab]) {
-          const newYardMap = { ...next[activeTab] };
-          delete newYardMap[vehicle.slotIndex];
-          next[activeTab] = newYardMap;
-        }
-        return next;
-      });
-      setNotifiedEmptySlots(prev => {
-        const next = new Set(prev);
-        next.delete(`${activeTab}-${vehicle.slotIndex}`);
-        return next;
-      });
+    vehicle.yardId = targetYardId;
+
+    // Update state using functional updates
+    const targetPool = yardPools.find(p => p.id === targetYardId);
+    if (targetPool) {
+      targetPool.logSetter(prev => [newLog, ...prev]);
+      if (exists) {
+        targetPool.setter(prev => prev.map(v => v.id === vehicle.id ? vehicle : v));
+      } else {
+        targetPool.setter(prev => [...prev, vehicle]);
+        
+        // Remove from empty slots tracking
+        setSlotEmptySince(prev => {
+          const next = { ...prev };
+          if (next[targetYardId]) {
+            const newYardMap = { ...next[targetYardId] };
+            delete newYardMap[vehicle.slotIndex];
+            next[targetYardId] = newYardMap;
+          }
+          return next;
+        });
+        
+        setNotifiedEmptySlots(prev => {
+          const next = new Set(prev);
+          next.delete(`${targetYardId}-${vehicle.slotIndex}`);
+          return next;
+        });
+      }
     }
+
     setIsFormOpen(false);
     setSelectedSlot(null);
   };
 
   const handleRemoveVehicle = async (id: string, manualExitTime?: string, idleReason?: string, idleActions?: string) => {
-    const exitTime = manualExitTime || new Date().toISOString();
+    let exitDate: Date;
+    try {
+      exitDate = manualExitTime ? new Date(manualExitTime) : new Date();
+      if (isNaN(exitDate.getTime())) exitDate = new Date();
+    } catch {
+      exitDate = new Date();
+    }
+    const exitTime = exitDate.toISOString();
 
+    const vehicle = allActiveVehicles.find(v => v.id === id);
+    if (!vehicle) {
+      addToast({ title: 'Erro', message: 'Veículo não encontrado ou já removido.', type: 'error' });
+      return;
+    }
+
+    // 2. Identify which yard this vehicle belongs to
+    const yardPools = [
+      { id: 'yard', vehicles: vehicles, setter: setVehicles, logSetter: setLogs },
+      { id: 'yard2', vehicles: vehicles2, setter: setVehicles2, logSetter: setLogs2 },
+      { id: 'yard3', vehicles: vehicles3, setter: setVehicles3, logSetter: setLogs3 },
+      { id: 'yard4', vehicles: vehicles4, setter: setVehicles4, logSetter: setLogs4 },
+      { id: 'yardP1', vehicles: vehiclesP1, setter: setVehiclesP1, logSetter: setLogsP1 },
+      { id: 'yardP2', vehicles: vehiclesP2, setter: setVehiclesP2, logSetter: setLogsP2 },
+      { id: 'yardP6', vehicles: vehiclesP6, setter: setVehiclesP6, logSetter: setLogsP6 },
+      { id: 'yardCob', vehicles: vehiclesCob, setter: setVehiclesCob, logSetter: setLogsCob },
+    ];
+
+    const sourcePool = yardPools.find(p => p.vehicles.some(v => v.id === id));
+    
+    if (!sourcePool) {
+      addToast({ title: 'Atenção', message: 'Veículo não localizado. Tente atualizar a página.', type: 'warning' });
+      setIsFormOpen(false);
+      setSelectedSlot(null);
+      return;
+    }
+
+    const targetYardId = sourcePool.id;
+    const getYardName = (yId: string) => DEFAULT_YARD_OPTIONS.find(o => o.id === yId)?.label || 'Pátio';
+    
+    const newLog: ActivityLog = {
+      id: Math.random().toString(36).substr(2, 9).toUpperCase(),
+      vehicleId: vehicle.id,
+      vehiclePlate: vehicle.plate,
+      vehicleModel: vehicle.model,
+      prismaNumber: vehicle.prisma.number,
+      prismaColor: vehicle.prisma.color,
+      action: 'exit',
+      timestamp: exitTime,
+      details: `Saída do pátio (${getYardName(targetYardId)} - Vaga ${vehicle.slotIndex + 1})`,
+      duration: `${differenceInHours(exitDate, new Date(vehicle.entryTime))}h`,
+      yardId: targetYardId,
+      yardName: getYardName(targetYardId),
+      idleReason: idleReason,
+      idleActions: idleActions
+    };
+
+    // 3. Persist to Supabase
     try {
       await databaseService.removeVehicle(id, exitTime);
+      await databaseService.saveLog(newLog, targetYardId);
     } catch (error) {
-      console.error('Erro ao remover do Supabase:', error);
+      console.error('Erro ao registrar saída no Supabase:', error);
+      addToast({ title: 'Sincronização Lenta', message: 'Saída registrada localmente, mas a sincronização com o servidor falhou.', type: 'error' });
     }
 
-    const setterMap: Record<string, React.Dispatch<React.SetStateAction<Vehicle[]>>> = {
-      'yard': setVehicles, 'yard2': setVehicles2, 'yard3': setVehicles3, 'yard4': setVehicles4,
-      'yardP1': setVehiclesP1, 'yardP2': setVehiclesP2, 'yardP6': setVehiclesP6, 'yardCob': setVehiclesCob
-    };
-    const logSetterMap: Record<string, React.Dispatch<React.SetStateAction<ActivityLog[]>>> = {
-      'yard': setLogs, 'yard2': setLogs2, 'yard3': setLogs3, 'yard4': setLogs4,
-      'yardP1': setLogsP1, 'yardP2': setLogsP2, 'yardP6': setLogsP6, 'yardCob': setLogsCob
-    };
-    const listMap: Record<string, Vehicle[]> = {
-      'yard': vehicles, 'yard2': vehicles2, 'yard3': vehicles3, 'yard4': vehicles4,
-      'yardP1': vehiclesP1, 'yardP2': vehiclesP2, 'yardP6': vehiclesP6, 'yardCob': vehiclesCob
-    };
-
-    const targetVehicles = listMap[activeTab];
-    const setTargetVehicles = setterMap[activeTab];
-    const setTargetLogs = logSetterMap[activeTab];
-
-    const vehicle = targetVehicles.find(v => v.id === id);
-    if (vehicle) {
-      const exitDate = manualExitTime ? new Date(manualExitTime) : new Date();
-      vehicle.exitTime = exitDate.toISOString();
-      const getYardName = (id: string) => DEFAULT_YARD_OPTIONS.find(o => o.id === id)?.label || 'Pátio';
-      
-      const newLog: ActivityLog = {
-        id: Math.random().toString(36).substr(2, 9).toUpperCase(),
-        vehicleId: vehicle.id,
-        vehiclePlate: vehicle.plate,
-        vehicleModel: vehicle.model,
-        prismaNumber: vehicle.prisma.number,
-        prismaColor: vehicle.prisma.color,
-        action: 'exit',
-        timestamp: exitDate.toISOString(),
-        details: `Saída do pátio (Vaga ${vehicle.slotIndex + 1})`,
-        duration: `${differenceInHours(exitDate, new Date(vehicle.entryTime))}h`,
-        yardId: activeTab,
-        yardName: getYardName(activeTab),
-        idleReason: idleReason,
-        idleActions: idleActions
+    // 4. Update Local State (Functional Updates)
+    sourcePool.logSetter(prev => [newLog, ...prev]);
+    sourcePool.setter(prev => prev.filter(v => v.id !== id));
+    
+    setNotifiedVehicleIds(prev => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    
+    setSlotEmptySince(prev => {
+      const next = { ...prev };
+      next[targetYardId] = {
+        ...(next[targetYardId] || {}),
+        [vehicle.slotIndex]: exitTime
       };
+      return next;
+    });
 
-      databaseService.saveLog(newLog, activeTab).catch(console.error);
-
-      setTargetLogs(prev => [newLog, ...prev]);
-      setNotifiedVehicleIds(prev => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-      
-      // Add to empty slots tracking
-      setSlotEmptySince(prev => {
-        const next = { ...prev };
-        const yardId = activeTab;
-        next[yardId] = {
-          ...(next[yardId] || {}),
-          [vehicle.slotIndex]: exitDate.toISOString()
-        };
-        return next;
-      });
-    }
-    setTargetVehicles(targetVehicles.filter(v => v.id !== id));
     setIsFormOpen(false);
     setSelectedSlot(null);
   };
@@ -759,6 +943,7 @@ const App: React.FC = () => {
 
   const handleLogin = (user: User) => {
     setCurrentUser(user);
+    addToast({ title: 'Bem-vindo', message: `Olá, ${user.name}! Acesso liberado ao YardLogic Pro.`, type: 'success' });
   };
 
   const handleLogout = async () => {
@@ -874,7 +1059,14 @@ const App: React.FC = () => {
           <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
         </div>
       ) : (
-        !currentUser && <Auth onLogin={handleLogin} isDarkMode={isDarkMode} />
+        (!currentUser || isResettingPassword) && (
+          <Auth 
+            onLogin={handleLogin} 
+            isDarkMode={isDarkMode} 
+            isResettingPassword={isResettingPassword}
+            onResetComplete={() => setIsResettingPassword(false)}
+          />
+        )
       )}
       
       <AnimatePresence>
@@ -1176,17 +1368,19 @@ const App: React.FC = () => {
         />
       )}
 
-      {isFormOpen && selectedSlot !== null && (
-        <VehicleForm
-          slotIndex={selectedSlot}
-          existingVehicle={currentVehicles.find(v => v.slotIndex === selectedSlot)}
-          allActiveVehicles={currentVehicles}
-          onSave={handleSaveVehicle}
-          onRemove={handleRemoveVehicle}
-          onClose={() => { setIsFormOpen(false); setSelectedSlot(null); }}
-          isDarkMode={isDarkMode}
-        />
-      )}
+      <AnimatePresence>
+        {isFormOpen && selectedSlot !== null && (
+          <VehicleForm
+            slotIndex={selectedSlot}
+            existingVehicle={currentVehicles.find(v => v.slotIndex === selectedSlot)}
+            allActiveVehicles={currentVehicles}
+            onSave={handleSaveVehicle}
+            onRemove={handleRemoveVehicle}
+            onClose={() => { setIsFormOpen(false); setSelectedSlot(null); }}
+            isDarkMode={isDarkMode}
+          />
+        )}
+      </AnimatePresence>
 
       {historyVehicleId && (
         <VehicleHistory

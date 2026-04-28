@@ -7,18 +7,23 @@ import { supabase } from '../services/supabase';
 interface AuthProps {
   onLogin: (user: User) => void;
   isDarkMode: boolean;
+  isResettingPassword?: boolean;
+  onResetComplete?: () => void;
 }
 
-const Auth: React.FC<AuthProps> = ({ onLogin, isDarkMode }) => {
+const Auth: React.FC<AuthProps> = ({ onLogin, isDarkMode, isResettingPassword, onResetComplete }) => {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
   const [name, setName] = useState('');
   const [recoveryEmail, setRecoveryEmail] = useState('');
   const [fingerprintEnabled, setFingerprintEnabled] = useState(false);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
   const [isRecovering, setIsRecovering] = useState(false);
+  const [useMagicLink, setUseMagicLink] = useState(false);
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -26,21 +31,46 @@ const Auth: React.FC<AuthProps> = ({ onLogin, isDarkMode }) => {
     setLoading(true);
 
     try {
+      if (isResettingPassword) {
+        if (newPassword.length < 6) {
+          throw new Error('A nova senha deve ter pelo menos 6 caracteres.');
+        }
+        const { error: resetError } = await supabase.auth.updateUser({ password: newPassword });
+        if (resetError) throw resetError;
+        setSuccess('Senha redefinida com sucesso! Redirecionando...');
+        setTimeout(() => {
+          if (onResetComplete) onResetComplete();
+        }, 3000);
+        return;
+      }
+
       if (isLogin) {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email,
+        const { data, error: signInError } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
           password,
         });
 
-        if (error) throw error;
+        if (signInError) {
+          if (signInError.message.includes('Email not confirmed')) {
+            throw new Error('E-mail não confirmado. Verifique sua caixa de entrada.');
+          }
+          if (signInError.message.includes('Invalid login credentials')) {
+            throw new Error('E-mail ou senha incorretos.');
+          }
+          throw signInError;
+        }
         
         if (data.user) {
           // Fetch profile
-          const { data: profile } = await supabase
+          const { data: profile, error: profileError } = await supabase
             .from('profiles')
             .select('*')
             .eq('id', data.user.id)
             .single();
+
+          if (profileError && profileError.code !== 'PGRST116') {
+            console.error('Erro ao buscar perfil:', profileError);
+          }
 
           onLogin({
             id: data.user.id,
@@ -58,8 +88,14 @@ const Auth: React.FC<AuthProps> = ({ onLogin, isDarkMode }) => {
           return;
         }
 
+        if (password.length < 6) {
+          setError('A senha deve ter pelo menos 6 caracteres.');
+          setLoading(false);
+          return;
+        }
+
         const { data, error: signUpError } = await supabase.auth.signUp({
-          email,
+          email: email.trim(),
           password,
           options: {
             data: {
@@ -71,6 +107,13 @@ const Auth: React.FC<AuthProps> = ({ onLogin, isDarkMode }) => {
         if (signUpError) throw signUpError;
 
         if (data.user) {
+          // Check if auto-confirm is off (common in Supabase)
+          if (data.session === null) {
+            setError('Cadastro realizado. Por favor, verifique seu e-mail para confirmar a conta antes de entrar.');
+            setLoading(false);
+            return;
+          }
+
           // Create profile
           const { error: profileError } = await supabase
             .from('profiles')
@@ -108,14 +151,45 @@ const Auth: React.FC<AuthProps> = ({ onLogin, isDarkMode }) => {
     setError('A autenticação por digital via Supabase requer configuração de WebAuthn.');
   };
 
+  const handleMagicLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email) {
+      setError('Por favor, informe seu e-mail.');
+      return;
+    }
+    setLoading(true);
+    setError('');
+    try {
+      const { error } = await supabase.auth.signInWithOtp({
+        email: email.trim(),
+        options: {
+          emailRedirectTo: `${window.location.origin}/`,
+        },
+      });
+      if (error) throw error;
+      setSuccess(`Um link de acesso foi enviado para ${email}. Verifique seu e-mail.`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Erro ao enviar link mágico.';
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleRecovery = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    setError('');
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(recoveryEmail || email);
+      const { error } = await supabase.auth.resetPasswordForEmail(recoveryEmail || email, {
+        redirectTo: `${window.location.origin}/`,
+      });
       if (error) throw error;
-      alert(`Um e-mail de recuperação foi enviado para ${recoveryEmail || email}`);
-      setIsRecovering(false);
+      setSuccess(`Um e-mail de recuperação foi enviado para ${recoveryEmail || email}. Verifique sua caixa de entrada e spam.`);
+      setTimeout(() => {
+        setIsRecovering(false);
+        setSuccess('');
+      }, 5000);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Ocorreu um erro na recuperação.';
       setError(message);
@@ -149,7 +223,95 @@ const Auth: React.FC<AuthProps> = ({ onLogin, isDarkMode }) => {
         </div>
 
         <AnimatePresence mode="wait">
-          {isRecovering ? (
+          {isResettingPassword ? (
+            <motion.form 
+              key="reset"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              onSubmit={handleAuth}
+              className="flex flex-col gap-4"
+            >
+              <h2 className={`text-lg font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Nova Senha</h2>
+              <p className="text-xs text-slate-500 font-medium">Defina uma nova senha segura.</p>
+              
+              {error && (
+                <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 text-[10px] font-black uppercase tracking-widest text-center">
+                  {error}
+                </div>
+              )}
+
+              {success && (
+                <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-[10px] font-black uppercase tracking-widest text-center">
+                  {success}
+                </div>
+              )}
+
+              <div className="relative">
+                <i className="fas fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"></i>
+                <input 
+                  type="password" 
+                  placeholder="Nova Senha (min. 6 caracteres)"
+                  required
+                  className={`w-full h-14 pl-12 pr-4 rounded-2xl border-2 outline-none font-bold transition-all ${isDarkMode ? 'bg-white/5 border-white/5 text-white focus:border-blue-500/50' : 'bg-slate-50 border-slate-200 text-slate-900 focus:border-blue-500'}`}
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                />
+              </div>
+
+              <button type="submit" disabled={loading || !!success} className="h-14 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest shadow-lg shadow-blue-600/30 hover:bg-blue-500 transition-all active:scale-95 mt-2 disabled:opacity-50">
+                {loading ? 'Redefinindo...' : 'Salvar Nova Senha'}
+              </button>
+            </motion.form>
+          ) : useMagicLink ? (
+            <motion.form 
+              key="magic-link"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              onSubmit={handleMagicLink}
+              className="flex flex-col gap-4"
+            >
+              <h2 className={`text-lg font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Acesso Sem Senha</h2>
+              <p className="text-xs text-slate-500 font-medium">Enviaremos um link de acesso direto para seu e-mail.</p>
+              
+              {error && (
+                <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 text-[10px] font-black uppercase tracking-widest text-center">
+                  {error}
+                </div>
+              )}
+
+              {success && (
+                <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-[10px] font-black uppercase tracking-widest text-center">
+                  {success}
+                </div>
+              )}
+
+              <div className="relative">
+                <i className="fas fa-envelope absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"></i>
+                <input 
+                  type="email" 
+                  placeholder="Seu e-mail"
+                  required
+                  className={`w-full h-14 pl-12 pr-4 rounded-2xl border-2 outline-none font-bold transition-all ${isDarkMode ? 'bg-white/5 border-white/5 text-white focus:border-blue-500/50' : 'bg-slate-50 border-slate-200 text-slate-900 focus:border-blue-500'}`}
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+              </div>
+
+              <button type="submit" disabled={loading || !!success} className="h-14 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest shadow-lg shadow-blue-600/30 hover:bg-blue-500 transition-all active:scale-95 mt-2">
+                {loading ? 'Enviando...' : 'Enviar Link de Acesso'}
+              </button>
+
+              <button 
+                type="button" 
+                onClick={() => { setUseMagicLink(false); setError(''); }}
+                className="text-xs font-black uppercase tracking-widest text-slate-500 hover:text-blue-600 transition-colors mt-2"
+              >
+                Voltar para Senha
+              </button>
+            </motion.form>
+          ) : isRecovering ? (
             <motion.form 
               key="recovery"
               initial={{ opacity: 0, x: 20 }}
@@ -161,6 +323,18 @@ const Auth: React.FC<AuthProps> = ({ onLogin, isDarkMode }) => {
               <h2 className={`text-lg font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Recuperar Senha</h2>
               <p className="text-xs text-slate-500 font-medium">Informe seu e-mail de recuperação cadastrado.</p>
               
+              {error && (
+                <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 text-[10px] font-black uppercase tracking-widest text-center">
+                  {error}
+                </div>
+              )}
+
+              {success && (
+                <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-[10px] font-black uppercase tracking-widest text-center">
+                  {success}
+                </div>
+              )}
+
               <div className="relative">
                 <i className="fas fa-envelope absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"></i>
                 <input 
@@ -286,14 +460,25 @@ const Auth: React.FC<AuthProps> = ({ onLogin, isDarkMode }) => {
               )}
 
               {isLogin && (
-                <div className="flex justify-end">
-                  <button 
-                    type="button" 
-                    onClick={() => setIsRecovering(true)}
-                    className="text-[10px] font-black uppercase tracking-widest text-slate-500 hover:text-blue-500 transition-colors"
-                  >
-                    Esqueceu a senha?
-                  </button>
+                <div className="flex flex-col gap-2">
+                  <div className="flex justify-end">
+                    <button 
+                      type="button" 
+                      onClick={() => setIsRecovering(true)}
+                      className="text-[10px] font-black uppercase tracking-widest text-slate-500 hover:text-blue-500 transition-colors"
+                    >
+                      Esqueceu a senha?
+                    </button>
+                  </div>
+                  <div className="flex justify-end">
+                    <button 
+                      type="button" 
+                      onClick={() => setUseMagicLink(true)}
+                      className="text-[10px] font-black uppercase tracking-widest text-blue-600/70 hover:text-blue-600 transition-colors"
+                    >
+                      Acessar via Link Mágico
+                    </button>
+                  </div>
                 </div>
               )}
 

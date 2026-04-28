@@ -234,9 +234,9 @@ export const MAX_SLOTS_P6 = YARD_LAYOUT_P6.reduce((acc, row) => acc + row.slots,
 export const MAX_SLOTS_COBERTURA = YARD_LAYOUT_COBERTURA.reduce((acc, row) => acc + row.slots, 0);
 
 export const ALERT_THRESHOLDS = {
-  WARNING: 2,
-  CRITICAL: 4,
-  SEVERE: 8
+  WARNING: 24,
+  CRITICAL: 100,
+  SEVERE: 168
 };
 
 export const getSlotDisplayName = (index: number, row?: string, col?: number): string => {

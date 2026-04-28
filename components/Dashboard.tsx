@@ -1,7 +1,8 @@
 
 import React, { useMemo, useState, useRef } from 'react';
 import { Vehicle, ActivityLog } from '../types';
-import { MAX_SLOTS, CONSULTANTS } from '../constants';
+import { motion } from 'motion/react';
+import { MAX_SLOTS, CONSULTANTS, ALERT_THRESHOLDS } from '../constants';
 import { getYardInsights, getStrategicOptimization, getLayoutAndFlowOptimization } from '../services/geminiService';
 import { toPng } from 'html-to-image';
 import { 
@@ -133,13 +134,13 @@ const Dashboard: React.FC<DashboardProps> = ({
       .filter(p => p.count > 0);
 
     const healthData = [
-      { name: 'Dentro do SLA', value: vehicles.filter(v => differenceInHours(new Date(), new Date(v.entryTime)) < 4).length, color: '#10b981' },
+      { name: 'Dentro do SLA', value: vehicles.filter(v => differenceInHours(new Date(), new Date(v.entryTime)) < ALERT_THRESHOLDS.WARNING).length, color: '#10b981' },
       { name: 'Alerta SLA', value: vehicles.filter(v => {
         const h = differenceInHours(new Date(), new Date(v.entryTime));
-        return h >= 4 && h < 8;
+        return h >= ALERT_THRESHOLDS.WARNING && h < ALERT_THRESHOLDS.CRITICAL;
       }).length, color: '#f59e0b' },
       { name: 'Tempo Excedido', value: vehicles.filter(v => {
-        return differenceInHours(new Date(), new Date(v.entryTime)) >= 8;
+        return differenceInHours(new Date(), new Date(v.entryTime)) >= ALERT_THRESHOLDS.CRITICAL;
       }).length, color: '#ef4444' }
     ];
 
@@ -157,6 +158,25 @@ const Dashboard: React.FC<DashboardProps> = ({
 
     const turnoverRate = todayEntries > 0 ? ((todayExits / todayEntries) * 100).toFixed(0) : '0';
 
+    const yardNames = allYardsData.length > 0 ? allYardsData.map(y => y.name) : Array.from(new Set(activityLogs.filter(l => l.yardName).map(l => l.yardName as string)));
+    
+    const heatmapData = yardNames.map(yardName => {
+      const hours = Array.from({ length: 24 }).map((_, hour) => {
+        const countAtHour = activityLogs.filter(log => {
+          const logTime = new Date(log.timestamp);
+          if (!isSameDay(logTime, today)) return false;
+          if (log.yardName !== yardName) return false;
+          return logTime.getHours() <= hour;
+        }).reduce((acc, log) => {
+          if (log.action === 'entry') return acc + 1;
+          if (log.action === 'exit') return acc - 1;
+          return acc;
+        }, 0);
+        return Math.max(0, countAtHour);
+      });
+      return { yardName, hours };
+    });
+
     return { 
       occupiedCount: vehicles.length, 
       consultantData, 
@@ -168,7 +188,8 @@ const Dashboard: React.FC<DashboardProps> = ({
       monthExits,
       hourData,
       topPeaks,
-      turnoverRate
+      turnoverRate,
+      heatmapData
     };
   }, [vehicles, activityLogs, allYardsData]);
 
@@ -420,6 +441,84 @@ const Dashboard: React.FC<DashboardProps> = ({
               </Bar>
             </BarChart>
           </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* 2.1 Heatmap de Densidade */}
+      <div className={`p-8 rounded-[2.8rem] border shadow-sm transition-colors ${isDarkMode ? 'bg-[#12141C] border-white/5' : 'bg-white border-slate-100'}`}>
+        <div className="flex items-center gap-4 mb-8">
+          <div className="w-10 h-10 rounded-xl bg-orange-600 flex items-center justify-center text-white shadow-lg shadow-orange-500/20">
+            <i className="fas fa-th"></i>
+          </div>
+          <div>
+            <h3 className={`text-sm font-black uppercase tracking-widest ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Densidade de Veículos (Hoje)</h3>
+            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-tight">Mapa de Calor por Setor e Horário</p>
+          </div>
+        </div>
+        
+        <div className="overflow-x-auto pb-4 custom-scrollbar">
+          <div className="min-w-[800px]">
+             {/* Header Horas */}
+             <div className="flex mb-2">
+                <div className="w-24 shrink-0"></div>
+                <div className="flex-1 flex justify-between px-2">
+                   {Array.from({ length: 24 }).map((_, i) => (
+                      <span key={i} className="text-[8px] font-black text-slate-400 w-6 text-center">{i}h</span>
+                   ))}
+                </div>
+             </div>
+             
+             {/* Grid */}
+             <div className="flex flex-col gap-1">
+                {stats.heatmapData.map((yard, yIdx) => (
+                   <div key={yIdx} className="flex items-center">
+                      <div className="w-24 shrink-0 pr-4">
+                         <span className={`text-[9px] font-black uppercase truncate block ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>{yard.yardName}</span>
+                      </div>
+                      <div className="flex-1 flex justify-between gap-1 px-1">
+                         {yard.hours.map((count, hIdx) => {
+                            const opacity = count > 0 ? 0.1 + (count * 0.15) : 0.05;
+                            return (
+                               <motion.div
+                                  key={hIdx}
+                                  initial={{ opacity: 0, scale: 0.8 }}
+                                  animate={{ opacity: 1, scale: 1 }}
+                                  transition={{ delay: (yIdx * 0.03) + (hIdx * 0.005) }}
+                                  className={`h-8 flex-1 rounded-sm relative group cursor-help`}
+                                  style={{ 
+                                     backgroundColor: count > 0 ? (isDarkMode ? `rgba(59, 130, 246, ${Math.min(0.9, opacity)})` : `rgba(37, 99, 235, ${Math.min(0.9, opacity)})`) : (isDarkMode ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)')
+                                  }}
+                               >
+                                  {count > 0 && (
+                                     <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <span className="text-[10px] font-black text-white drop-shadow-md">{count}</span>
+                                     </div>
+                                  )}
+                                  {/* Simple Tooltip */}
+                                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 p-2 rounded-lg bg-slate-900 text-white text-[9px] font-black uppercase whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-[60] transition-opacity shadow-xl">
+                                     {yard.yardName} • {hIdx}:00 • {count} veículo(s)
+                                  </div>
+                               </motion.div>
+                            );
+                         })}
+                      </div>
+                   </div>
+                ))}
+             </div>
+          </div>
+        </div>
+        
+        <div className="mt-6 flex items-center justify-end gap-4">
+           <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest text-[9px]">Menos</span>
+           <div className="flex items-center gap-1">
+              <div className="w-3 h-3 rounded-sm bg-slate-200 dark:bg-white/5"></div>
+              <div className="w-3 h-3 rounded-sm bg-blue-500/20"></div>
+              <div className="w-3 h-3 rounded-sm bg-blue-500/40"></div>
+              <div className="w-3 h-3 rounded-sm bg-blue-500/60"></div>
+              <div className="w-3 h-3 rounded-sm bg-blue-500/80"></div>
+              <div className="w-3 h-3 rounded-sm bg-blue-500"></div>
+           </div>
+           <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest text-[9px]">Mais</span>
         </div>
       </div>
 

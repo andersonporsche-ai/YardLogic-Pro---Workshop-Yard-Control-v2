@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { Vehicle, ConsultantName, WashStatus, DeliveryStatus } from '../types';
 import { CONSULTANTS, PRISMA_COLORS, PORSCHE_MODELS, WORKSHOP_SERVICES, WASH_STATUS_OPTIONS, DELIVERY_STATUS_OPTIONS, getSlotDisplayName, ALERT_THRESHOLDS } from '../constants';
 import { differenceInMinutes } from 'date-fns';
@@ -11,10 +12,12 @@ interface VehicleFormProps {
   existingVehicle?: Vehicle;
   allActiveVehicles?: Vehicle[];
   onSave: (vehicle: Vehicle) => void;
-  onRemove?: (id: string, exitTime?: string) => void;
+  onRemove?: (id: string, exitTime?: string, idleReason?: string, idleActions?: string) => void;
   onClose: () => void;
   isDarkMode?: boolean;
 }
+
+const DRAFT_STORAGE_KEY = 'vehicle_form_draft';
 
 const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, allActiveVehicles, onSave, onRemove, onClose, isDarkMode = false }) => {
   const [showConfirmExit, setShowConfirmExit] = useState(false);
@@ -51,6 +54,39 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
     slotIndex: slotIndex,
     prisma: { number: 0, color: PRISMA_COLORS[0].hex }
   });
+
+  const [ocrSuccess, setOcrSuccess] = useState(false);
+  const [plateScanResult, setPlateScanResult] = useState<'none' | 'success' | 'error'>('none');
+
+  // Load draft on mount if not editing existing vehicle
+  useEffect(() => {
+    if (!existingVehicle) {
+      const savedDraft = localStorage.getItem(DRAFT_STORAGE_KEY);
+      if (savedDraft) {
+        try {
+          const parsedDraft = JSON.parse(savedDraft);
+          // Only restore if it's not a significantly old draft or if it matches the current slot context
+          // For simplicity and based on user request, we restore it as a partial update
+          setFormData(prev => ({
+            ...prev,
+            ...parsedDraft,
+            // Ensure ID and slotIndex are maintained from props/initial if draft doesn't have them correctly
+            id: parsedDraft.id || prev.id,
+            slotIndex: slotIndex // Priority to current slot
+          }));
+        } catch (e) {
+          console.error("Failed to parse vehicle draft:", e);
+        }
+      }
+    }
+  }, [existingVehicle, slotIndex]);
+
+  // Save draft whenever formData changes
+  useEffect(() => {
+    if (!existingVehicle) {
+      localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(formData));
+    }
+  }, [formData, existingVehicle]);
 
   useEffect(() => {
     if (existingVehicle) {
@@ -235,17 +271,42 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
   const processImageWithGemini = async (base64Data: string) => {
     setIsProcessingAI(true);
     setCameraError(null);
+    setOcrSuccess(false);
+    setPlateScanResult('none');
+    
+    // Clear plate error before processing
+    setErrors(prev => ({ ...prev, plate: '' }));
+
     try {
       const cleanPlate = await extractLicensePlate(base64Data);
 
       if (cleanPlate) {
-        setFormData(prev => ({ ...prev, plate: cleanPlate }));
+        const nextData = { ...formData, plate: cleanPlate };
+        setFormData(nextData);
+        
+        // Trigger validation with the new plate
+        const isValid = validateField('plate', cleanPlate, nextData);
+        
+        if (isValid) {
+          setOcrSuccess(true);
+          setPlateScanResult('success');
+          // Auto-hide success message after 4 seconds
+          setTimeout(() => {
+            setOcrSuccess(false);
+            setPlateScanResult('none');
+          }, 4000);
+        } else {
+          setPlateScanResult('error');
+          setCameraError("Placa reconhecida, mas contém erros de validação.");
+        }
       } else {
-        setCameraError("Não foi possível ler a placa com precisão. Tente enquadrar melhor.");
+        setPlateScanResult('error');
+        setCameraError("Não foi possível identificar uma placa legível. Tente aproximar mais e manter a câmera estável.");
       }
     } catch (err) {
       console.error("AI Processing Error:", err);
-      setCameraError("Falha no motor de OCR. Verifique sua conexão.");
+      setPlateScanResult('error');
+      setCameraError("Falha na comunicação com o serviço de reconhecimento. Verifique sua conexão.");
     } finally {
       setIsProcessingAI(false);
     }
@@ -348,6 +409,9 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
       return;
     }
 
+    // Clear draft on successful save
+    localStorage.removeItem(DRAFT_STORAGE_KEY);
+
     const finalData = { ...formData };
     
     // Record registration time if it's a new entry
@@ -372,7 +436,12 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
   const isDarkText = textColor === 'text-slate-950';
 
   return (
-    <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center z-[100] p-4 animate-in fade-in duration-300">
+    <motion.div 
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center z-[100] p-4"
+    >
       {/* CAMERA OVERLAY */}
       {isCameraOpen && (
         <div className="absolute inset-0 bg-black z-[150] flex flex-col items-center justify-center p-6">
@@ -385,40 +454,45 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
             />
             {/* Mercosul Guide Overlay */}
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className={`w-3/4 h-1/3 border-4 rounded-xl shadow-[0_0_0_1000px_rgba(0,0,0,0.5)] transition-all duration-500 ${isPlateCentered ? 'border-emerald-500 shadow-[0_0_40px_rgba(16,185,129,0.4)]' : isFocusing ? 'border-white shadow-[0_0_20px_rgba(255,255,255,0.3)]' : isFramingStable ? 'border-amber-400 shadow-[0_0_20px_rgba(251,191,36,0.2)]' : 'border-blue-500/50'}`}>
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className={`w-3/4 h-1/3 border-4 rounded-xl shadow-[0_0_0_1000px_rgba(0,0,0,0.5)] transition-all duration-500 relative ${isPlateCentered ? 'border-emerald-500 shadow-[0_0_40px_rgba(16,185,129,0.4)]' : isFocusing ? 'border-white shadow-[0_0_20px_rgba(255,255,255,0.3)]' : isFramingStable ? 'border-amber-400 shadow-[0_0_20px_rgba(251,191,36,0.2)]' : 'border-blue-500/50'}`}
+              >
+                {/* Horizontal Scanning Bar */}
+                <motion.div 
+                  initial={{ top: '0%' }}
+                  animate={{ top: '100%', opacity: [0, 1, 1, 0] }}
+                  transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
+                  className="absolute left-0 right-0 h-0.5 bg-blue-400 shadow-[0_0_10px_rgba(96,165,250,0.8)] z-10"
+                />
+
                 {/* Corner Markers */}
-                <div className={`absolute -top-2 -left-2 w-8 h-8 border-t-4 border-l-4 rounded-tl-lg transition-colors duration-300 ${isPlateCentered ? 'border-emerald-500' : isFocusing ? 'border-white' : isFramingStable ? 'border-amber-400' : 'border-blue-500'}`}></div>
-                <div className={`absolute -top-2 -right-2 w-8 h-8 border-t-4 border-r-4 rounded-tr-lg transition-colors duration-300 ${isPlateCentered ? 'border-emerald-500' : isFocusing ? 'border-white' : isFramingStable ? 'border-amber-400' : 'border-blue-500'}`}></div>
-                <div className={`absolute -bottom-2 -left-2 w-8 h-8 border-b-4 border-l-4 rounded-bl-lg transition-colors duration-300 ${isPlateCentered ? 'border-emerald-500' : isFocusing ? 'border-white' : isFramingStable ? 'border-amber-400' : 'border-blue-500'}`}></div>
-                <div className={`absolute -bottom-2 -right-2 w-8 h-8 border-b-4 border-r-4 rounded-br-lg transition-colors duration-300 ${isPlateCentered ? 'border-emerald-500' : isFocusing ? 'border-white' : isFramingStable ? 'border-amber-400' : 'border-blue-500'}`}></div>
+                <div className={`absolute -top-2 -left-2 w-10 h-10 border-t-4 border-l-4 rounded-tl-xl transition-colors duration-300 ${isPlateCentered ? 'border-emerald-500' : isFocusing ? 'border-white' : isFramingStable ? 'border-amber-400' : 'border-blue-500'}`}></div>
+                <div className={`absolute -top-2 -right-2 w-10 h-10 border-t-4 border-r-4 rounded-tr-xl transition-colors duration-300 ${isPlateCentered ? 'border-emerald-500' : isFocusing ? 'border-white' : isFramingStable ? 'border-amber-400' : 'border-blue-500'}`}></div>
+                <div className={`absolute -bottom-2 -left-2 w-10 h-10 border-b-4 border-l-4 rounded-bl-xl transition-colors duration-300 ${isPlateCentered ? 'border-emerald-500' : isFocusing ? 'border-white' : isFramingStable ? 'border-amber-400' : 'border-blue-500'}`}></div>
+                <div className={`absolute -bottom-2 -right-2 w-10 h-10 border-b-4 border-r-4 rounded-br-xl transition-colors duration-300 ${isPlateCentered ? 'border-emerald-500' : isFocusing ? 'border-white' : isFramingStable ? 'border-amber-400' : 'border-blue-500'}`}></div>
                 
                 {/* Centered Crosshair / Focus Reticle */}
                 <div className={`absolute inset-0 flex items-center justify-center transition-all duration-500 ${isFocusing ? 'opacity-100 scale-110' : isFramingStable ? 'opacity-100 scale-100' : 'opacity-0 scale-90'}`}>
-                  <div className={`w-10 h-10 border-2 rounded-full border-dashed animate-spin-slow ${isPlateCentered ? 'border-emerald-500' : isFocusing ? 'border-white' : 'border-amber-400/50'}`}></div>
-                  <div className={`w-6 h-px absolute ${isPlateCentered ? 'bg-emerald-500' : isFocusing ? 'bg-white' : 'bg-amber-400/50'}`}></div>
-                  <div className={`h-6 w-px absolute ${isPlateCentered ? 'bg-emerald-500' : isFocusing ? 'bg-white' : 'bg-amber-400/50'}`}></div>
+                  <div className={`w-12 h-12 border-2 rounded-full border-dashed animate-spin-slow ${isPlateCentered ? 'border-emerald-500' : isFocusing ? 'border-white' : 'border-amber-400/50'}`}></div>
+                  <div className={`w-8 h-px absolute ${isPlateCentered ? 'bg-emerald-500' : isFocusing ? 'bg-white' : 'bg-amber-400/50'}`}></div>
+                  <div className={`h-8 w-px absolute ${isPlateCentered ? 'bg-emerald-500' : isFocusing ? 'bg-white' : 'bg-amber-400/50'}`}></div>
                 </div>
 
                 {/* Status Label */}
-                <div className="absolute -top-12 left-1/2 -translate-x-1/2 whitespace-nowrap flex flex-col items-center gap-2">
-                  <span className={`text-[10px] font-black uppercase tracking-[0.3em] px-4 py-1.5 rounded-full shadow-lg transition-all duration-500 ${isPlateCentered ? 'bg-emerald-500 text-white scale-110' : isFocusing ? 'bg-white text-slate-900 animate-pulse' : isFramingStable ? 'bg-amber-500 text-white' : 'bg-blue-500/20 text-blue-400'}`}>
-                    {isPlateCentered ? 'Placa Centralizada' : isFocusing ? 'Ajustando Foco...' : isFramingStable ? 'Enquadramento OK' : 'Buscando Placa...'}
+                <div className="absolute -top-14 left-1/2 -translate-x-1/2 whitespace-nowrap flex flex-col items-center gap-2">
+                  <span className={`text-[10px] font-black uppercase tracking-[0.3em] px-5 py-2 rounded-full shadow-lg transition-all duration-500 ${isPlateCentered ? 'bg-emerald-500 text-white scale-110' : isFocusing ? 'bg-white text-slate-900 animate-pulse' : isFramingStable ? 'bg-amber-500 text-white' : 'bg-blue-600/40 text-blue-100 backdrop-blur-md'}`}>
+                    {isPlateCentered ? 'Pronto para Capturar' : isFocusing ? 'Estabilizando Foco...' : isFramingStable ? 'Enquadramento Aceitável' : 'Posicione a Placa'}
                   </span>
-                  {(isPlateCentered || isFocusing) && (
-                    <div className="flex gap-1">
-                      <div className={`w-1.5 h-1.5 rounded-full ${isPlateCentered ? 'bg-emerald-500' : 'bg-white'} animate-ping`}></div>
-                      <div className={`w-1.5 h-1.5 rounded-full ${isPlateCentered ? 'bg-emerald-500' : 'bg-white'} animate-ping delay-75`}></div>
-                      <div className={`w-1.5 h-1.5 rounded-full ${isPlateCentered ? 'bg-emerald-500' : 'bg-white'} animate-ping delay-150`}></div>
-                    </div>
-                  )}
                 </div>
 
-                {/* AI Detection Corners (Decorative) */}
-                <div className={`absolute top-4 left-4 w-2 h-2 border-t border-l transition-colors ${isPlateCentered ? 'border-emerald-500' : 'border-white/20'}`}></div>
-                <div className={`absolute top-4 right-4 w-2 h-2 border-t border-r transition-colors ${isPlateCentered ? 'border-emerald-500' : 'border-white/20'}`}></div>
-                <div className={`absolute bottom-4 left-4 w-2 h-2 border-b border-l transition-colors ${isPlateCentered ? 'border-emerald-500' : 'border-white/20'}`}></div>
-                <div className={`absolute bottom-4 right-4 w-2 h-2 border-b border-r transition-colors ${isPlateCentered ? 'border-emerald-500' : 'border-white/20'}`}></div>
-              </div>
+                {/* AI Detection Visual Hints */}
+                <div className="absolute top-2 left-2 flex gap-1">
+                  <div className={`w-1 h-1 rounded-full ${isPlateCentered ? 'bg-emerald-500' : 'bg-blue-500/30'}`}></div>
+                  <div className={`w-1 h-1 rounded-full ${isPlateCentered ? 'bg-emerald-500' : 'bg-blue-500/30'}`}></div>
+                </div>
+              </motion.div>
             </div>
 
             {/* Scanning Animation */}
@@ -552,8 +626,15 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
                   <button 
                     onClick={() => { 
                       let exitISO = undefined;
-                      if (manualExitDate && manualExitTime) {
-                        exitISO = new Date(`${manualExitDate}T${manualExitTime}`).toISOString();
+                      try {
+                        if (manualExitDate && manualExitTime) {
+                          const dateObj = new Date(`${manualExitDate}T${manualExitTime}`);
+                          if (!isNaN(dateObj.getTime())) {
+                            exitISO = dateObj.toISOString();
+                          }
+                        }
+                      } catch (err) {
+                        console.error("Erro ao converter data de saída:", err);
                       }
                       onRemove?.(formData.id!, exitISO, idleReason, idleActions); 
                       setShowConfirmExit(false); 
@@ -574,7 +655,13 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
         </div>
       )}
 
-      <div className={`${isDarkMode ? 'bg-[#0F1117] border-white/10' : 'bg-white border-slate-200'} rounded-[2.5rem] shadow-2xl w-full max-w-3xl overflow-hidden border relative animate-in zoom-in-95 duration-300 flex flex-col md:flex-row max-h-[95vh] md:max-h-[90vh]`}>
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.9, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.9, y: 20 }}
+        transition={{ type: "spring", damping: 25, stiffness: 300 }}
+        className={`${isDarkMode ? 'bg-[#0F1117] border-white/10' : 'bg-white border-slate-200'} rounded-[2.5rem] shadow-2xl w-full max-w-3xl overflow-hidden border relative flex flex-col md:flex-row max-h-[95vh] md:max-h-[90vh]`}
+      >
         
         {/* TAG LATERAL - IDENTIFICAÇÃO PREMIUM */}
         <div 
@@ -687,6 +774,35 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
                           validateField('plate', val);
                         }} 
                       />
+
+                      {/* AI Feedback Animation Overlay */}
+                      <AnimatePresence mode="wait">
+                        {plateScanResult !== 'none' && (
+                          <motion.div
+                            initial={{ opacity: 0, scale: 0.5 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.5 }}
+                            className={`absolute -right-12 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full flex items-center justify-center shadow-lg z-10 ${
+                              plateScanResult === 'success' ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'
+                            }`}
+                          >
+                            <motion.i 
+                              initial={{ rotate: -45 }}
+                              animate={{ rotate: 0 }}
+                              className={`fas ${plateScanResult === 'success' ? 'fa-check' : 'fa-exclamation-triangle'} text-lg`}
+                            />
+                            {/* Pulse effect for success */}
+                            {plateScanResult === 'success' && (
+                              <motion.div 
+                                initial={{ scale: 1, opacity: 0.5 }}
+                                animate={{ scale: 1.5, opacity: 0 }}
+                                transition={{ repeat: Infinity, duration: 1.5 }}
+                                className="absolute inset-0 rounded-full bg-emerald-500"
+                              />
+                            )}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                     </div>
                     <button 
                       type="button"
@@ -707,6 +823,16 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
                   )}
                   {cameraError && (
                     <p className="text-[9px] font-black text-red-500 uppercase tracking-widest ml-1 animate-pulse">{cameraError}</p>
+                  )}
+                  {ocrSuccess && (
+                    <p className="text-[9px] font-black text-emerald-500 uppercase tracking-widest ml-1 flex items-center gap-2 animate-in fade-in slide-in-from-left-2 transition-all">
+                      <i className="fas fa-check-circle"></i> Placa reconhecida automaticamente
+                    </p>
+                  )}
+                  {isProcessingAI && !cameraError && (
+                    <p className="text-[9px] font-black text-blue-500 uppercase tracking-widest ml-1 animate-pulse flex items-center gap-2">
+                       <i className="fas fa-microchip animate-spin text-[8px]"></i> IA analisando imagem...
+                    </p>
                   )}
                 </div>
                 <div className="space-y-3">
@@ -918,8 +1044,8 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
             </form>
           </div>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 };
 

@@ -15,7 +15,7 @@ interface YardViewProps {
   onViewHistory: (vehicleId: string) => void;
   onUpdateVehicle: (vehicle: Vehicle) => void;
   onUpdateLog: (logId: string, updates: Partial<ActivityLog>) => void;
-  onRemoveVehicle: (id: string) => void;
+  onRemoveVehicle: (id: string, exitTime?: string, idleReason?: string, idleActions?: string) => void;
   isDarkMode?: boolean;
   selectedSlotIndex?: number | null;
   now: Date;
@@ -172,9 +172,13 @@ const YardView: React.FC<YardViewProps> = ({
     const x = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     const y = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
 
+    // Calculate scroll targets taking zoom into account
+    const scrollLeft = x * container.scrollWidth - container.clientWidth / 2;
+    const scrollTop = y * container.scrollHeight - container.clientHeight / 2;
+
     container.scrollTo({
-      left: x * container.scrollWidth - container.clientWidth / 2,
-      top: y * container.scrollHeight - container.clientHeight / 2,
+      left: scrollLeft,
+      top: scrollTop,
       behavior: isDragging ? 'auto' : 'smooth'
     });
   }, []);
@@ -466,7 +470,7 @@ const YardView: React.FC<YardViewProps> = ({
       .sort((a, b) => new Date(b.start).getTime() - new Date(a.start).getTime());
   }, [getVacantHistory, maxSlots, idleDurationFilter, idleReasonSearch]);
 
-  // Monitoramento de Alertas Críticos (SLA > 4h) e Vagas Ociosas (+24h)
+  // Monitoramento de Alertas Críticos (SLA > {ALERT_THRESHOLDS.CRITICAL}h) e Vagas Ociosas (+24h)
   useEffect(() => {
     const criticalVehicles = vehicles.filter(v => {
       const entryDate = new Date(v.entryTime);
@@ -510,7 +514,7 @@ const YardView: React.FC<YardViewProps> = ({
           type: 'vehicle',
           title: 'SLA Crítico',
           subtitle: v.model,
-          details: `Veículo ultrapassou o limite de 4h. Consultor: ${v.consultant}`,
+          details: `Veículo ultrapassou o limite de ${ALERT_THRESHOLDS.CRITICAL}h. Consultor: ${v.consultant}`,
           time: `${Math.floor(differenceInMinutes(now, new Date(v.entryTime)) / 60)}h ${differenceInMinutes(now, new Date(v.entryTime)) % 60}m`,
           severity: 'critical',
           data: v
@@ -688,7 +692,7 @@ const YardView: React.FC<YardViewProps> = ({
         </button>
       )}
 
-      {/* MODAL DE ALERTA CRÍTICO (SLA > 4H ou Vaga Ociosa) */}
+      {/* MODAL DE ALERTA CRÍTICO (SLA > {ALERT_THRESHOLDS.CRITICAL}H ou Vaga Ociosa) */}
       {alertQueue.length > 0 && !showAlertsPanel && (() => {
         const alert = alertQueue[0];
         return (
@@ -852,9 +856,18 @@ const YardView: React.FC<YardViewProps> = ({
       
       <div className={`no-print px-8 py-4 border-b transition-all flex flex-wrap items-center justify-between gap-6 shadow-xl z-20 backdrop-blur-xl ${isDarkMode ? 'bg-[#0F1117]/80 border-white/5' : 'bg-white/80 border-slate-200'}`}>
         <div className="flex flex-col">
-          <h3 className={`text-xl font-outfit font-black uppercase tracking-tighter leading-none ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-            Monitor de <span className="text-blue-500">Fluxo</span> <span className="text-slate-400 ml-2 opacity-50">| {yardName}</span>
-          </h3>
+          <div className="flex items-center gap-4">
+            <h3 className={`text-xl font-outfit font-black uppercase tracking-tighter leading-none ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+              Monitor de <span className="text-blue-500">Fluxo</span> <span className="text-slate-400 ml-2 opacity-50">| {yardName}</span>
+            </h3>
+            <button 
+              onClick={() => setIsReorderModalOpen(true)}
+              className={`w-8 h-8 rounded-lg border-2 flex items-center justify-center transition-all hover:scale-110 active:scale-95 ${isDarkMode ? 'bg-white/5 border-white/10 text-slate-400 hover:text-blue-400 hover:border-blue-400/50' : 'bg-white border-slate-200 text-slate-500 hover:text-blue-500 hover:border-blue-500'}`}
+              title="Personalizar Ordem dos Setores"
+            >
+              <i className="fas fa-grip-vertical text-[10px]"></i>
+            </button>
+          </div>
           <span className="text-[9px] font-space text-slate-500 font-black uppercase tracking-[0.2em] mt-1">Gestão Tática Porsche & SLA de Pátio</span>
         </div>
 
@@ -1598,7 +1611,7 @@ const YardView: React.FC<YardViewProps> = ({
                             v 
                               ? `${isDarkMode ? 'bg-[#161922] border-white/5 shadow-2xl' : 'bg-white border-slate-100 shadow-xl hover:shadow-2xl'}`
                               : `${staleVacantClass} border-dashed hover:bg-blue-500/5 ${emptyAnim}`
-                          } ${isSelected ? 'animate-selected-fluid' : ''} ${info?.isAttentionRequired ? 'animate-critical-pulse ring-2 ring-red-500/30' : ''} ${info?.hours && info.hours >= 8 ? 'ring-4 ring-red-500 ring-offset-4 z-50 animate-critical-pulse' : ''} ${v?.washStatus === 'Veículo Pronto' ? 'animate-ready-pulse' : ''} ${opacityClass} ${pulseHighlight} ${highlightedSlot === idx ? 'ring-4 ring-blue-500 ring-offset-4 z-50 scale-105' : ''} ${riskySlots.includes(idx) ? 'ring-4 ring-orange-500 ring-offset-4 z-50 animate-pulse' : ''}`}
+                          } ${isSelected ? 'animate-selected-fluid' : ''} ${info?.isAttentionRequired ? 'animate-critical-pulse ring-2 ring-red-500/30' : ''} ${info?.hours && info.hours >= 8 ? 'ring-4 ring-red-500 ring-offset-4 z-50 animate-critical-pulse' : ''} ${v?.washStatus === 'Veículo Pronto' ? 'animate-ready-pulse' : ''} ${opacityClass} ${pulseHighlight} ${highlightedSlot === idx ? 'animate-selection-highlight' : ''} ${riskySlots.includes(idx) ? 'ring-4 ring-orange-500 ring-offset-4 z-50 animate-pulse' : ''}`}
                         >
                           {(info?.isAttentionRequired || riskySlots.includes(idx)) && (
                             <div className={`absolute top-4 right-4 z-20 w-8 h-8 rounded-full flex items-center justify-center text-white shadow-lg animate-bounce ${info?.hours && info.hours >= 8 ? 'bg-red-600 scale-110 shadow-red-500/50' : 'bg-orange-500'}`}>
