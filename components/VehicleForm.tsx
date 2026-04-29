@@ -58,6 +58,8 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
   const [ocrSuccess, setOcrSuccess] = useState(false);
   const [plateScanResult, setPlateScanResult] = useState<'none' | 'success' | 'error'>('none');
 
+  const [isDraftRestored, setIsDraftRestored] = useState(false);
+
   // Load draft on mount if not editing existing vehicle
   useEffect(() => {
     if (!existingVehicle) {
@@ -65,21 +67,44 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
       if (savedDraft) {
         try {
           const parsedDraft = JSON.parse(savedDraft);
-          // Only restore if it's not a significantly old draft or if it matches the current slot context
-          // For simplicity and based on user request, we restore it as a partial update
-          setFormData(prev => ({
-            ...prev,
-            ...parsedDraft,
-            // Ensure ID and slotIndex are maintained from props/initial if draft doesn't have them correctly
-            id: parsedDraft.id || prev.id,
-            slotIndex: slotIndex // Priority to current slot
-          }));
+          // Check if it's actually "dirty" (has meaningful data)
+          const hasData = parsedDraft.plate || parsedDraft.model || parsedDraft.customer || (parsedDraft.prisma && parsedDraft.prisma.number > 0);
+          
+          if (hasData) {
+            setFormData(prev => ({
+              ...prev,
+              ...parsedDraft,
+              slotIndex: slotIndex // Priority to current slot context
+            }));
+            setIsDraftRestored(true);
+          }
         } catch (e) {
           console.error("Failed to parse vehicle draft:", e);
         }
       }
     }
   }, [existingVehicle, slotIndex]);
+
+  const handleDiscardDraft = () => {
+    localStorage.removeItem(DRAFT_STORAGE_KEY);
+    setIsDraftRestored(false);
+    // Reset to initial state
+    setFormData({
+      id: Math.random().toString(36).substr(2, 9).toUpperCase(),
+      plate: '',
+      registrationTime: '',
+      entryTime: '',
+      exitTime: '',
+      model: '',
+      customer: '',
+      service: WORKSHOP_SERVICES[0],
+      consultant: '' as ConsultantName,
+      washStatus: 'Não Solicitado',
+      deliveryStatus: 'Aguardando Liberação',
+      slotIndex: slotIndex,
+      prisma: { number: 0, color: PRISMA_COLORS[0].hex }
+    });
+  };
 
   // Save draft whenever formData changes
   useEffect(() => {
@@ -700,7 +725,7 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
         <div className="flex-1 flex flex-col min-w-0 bg-inherit overflow-hidden">
           {/* Header */}
           <div className={`px-10 py-8 border-b flex justify-between items-center ${isDarkMode ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50/50 border-slate-100'}`}>
-            <div>
+            <div className="relative">
               <div className="flex items-center gap-3 mb-1">
                 <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
                 <h3 className={`text-2xl font-black tracking-tighter uppercase ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
@@ -721,6 +746,28 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
                   </div>
                 )}
               </div>
+
+              {/* Draft Banner */}
+              <AnimatePresence>
+                {isDraftRestored && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="absolute -bottom-10 left-0 flex items-center gap-2 px-3 py-1 bg-amber-500 text-white rounded-lg shadow-lg z-20"
+                  >
+                    <i className="fas fa-history text-[8px]"></i>
+                    <span className="text-[8px] font-black uppercase tracking-tighter">Rascunho recuperado</span>
+                    <button 
+                      onClick={handleDiscardDraft}
+                      className="ml-2 hover:bg-white/20 rounded-full w-4 h-4 flex items-center justify-center transition-colors"
+                      title="Descartar rascunho"
+                    >
+                      <i className="fas fa-trash-alt text-[7px]"></i>
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
             <button 
               onClick={onClose} 
