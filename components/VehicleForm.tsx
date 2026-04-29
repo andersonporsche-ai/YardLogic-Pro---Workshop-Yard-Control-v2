@@ -5,6 +5,7 @@ import { Vehicle, ConsultantName, WashStatus, DeliveryStatus } from '../types';
 import { CONSULTANTS, PRISMA_COLORS, PORSCHE_MODELS, WORKSHOP_SERVICES, WASH_STATUS_OPTIONS, DELIVERY_STATUS_OPTIONS, getSlotDisplayName, ALERT_THRESHOLDS } from '../constants';
 import { differenceInMinutes } from 'date-fns';
 import { extractLicensePlate } from '../services/geminiService';
+import { getSmartRecommendation } from '../services/yardOptimization';
 import PrismaScanner from './PrismaScanner';
 
 interface VehicleFormProps {
@@ -22,6 +23,7 @@ const DRAFT_STORAGE_KEY = 'vehicle_form_draft';
 const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, allActiveVehicles, onSave, onRemove, onClose, isDarkMode = false }) => {
   const [showConfirmExit, setShowConfirmExit] = useState(false);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [isTorchOn, setIsTorchOn] = useState(false);
   const [isPrismaScannerOpen, setIsPrismaScannerOpen] = useState(false);
   const [isProcessingAI, setIsProcessingAI] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -34,6 +36,18 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+
+  const toggleTorch = () => {
+    if (streamRef.current) {
+      const track = streamRef.current.getVideoTracks()[0];
+      const nextTorch = !isTorchOn;
+      if (track.applyConstraints) {
+        track.applyConstraints({ advanced: [{ torch: nextTorch }] as MediaTrackConstraintSet[] })
+          .then(() => setIsTorchOn(nextTorch))
+          .catch(err => console.warn("Torch not supported:", err));
+      }
+    }
+  };
 
   const [manualExitDate, setManualExitDate] = useState('');
   const [manualExitTime, setManualExitTime] = useState('');
@@ -271,6 +285,7 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
     setIsCameraOpen(false);
     setCameraError(null);
     setZoom(1);
+    setIsTorchOn(false);
     setIsFramingStable(false);
     setIsPlateCentered(false);
   };
@@ -283,11 +298,16 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
     const context = canvas.getContext('2d');
 
     if (context) {
+      // Use original video resolution for maximum detail
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
+      
+      // Clear and draw
+      context.clearRect(0, 0, canvas.width, canvas.height);
       context.drawImage(video, 0, 0, canvas.width, canvas.height);
       
-      const base64Image = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+      // Increased quality for better OCR accuracy
+      const base64Image = canvas.toDataURL('image/jpeg', 0.95).split(',')[1];
       stopCamera();
       await processImageWithGemini(base64Image);
     }
@@ -303,10 +323,81 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
     setErrors(prev => ({ ...prev, plate: '' }));
 
     try {
-      const cleanPlate = await extractLicensePlate(base64Data);
+      const extractedPlate = await extractLicensePlate(base64Data);
 
-      if (cleanPlate) {
-        const nextData = { ...formData, plate: cleanPlate };
+      if (extractedPlate) {
+        const hasHyphen = extractedPlate.includes('-');
+        const cleanPlate = extractedPlate.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+        
+        let finalPlate = cleanPlate;
+
+        // Logical correction based on pattern detection
+        if (cleanPlate.length === 7) {
+          const chars = cleanPlate.split('');
+          const isMercosulAB = /^[A-Z]{2}[0-9]{3}[A-Z]{2}$/.test(cleanPlate);
+          const startsWith3Letters = /^[A-Z]{3}/.test(cleanPlate);
+
+          if (startsWith3Letters) {
+            // BRAZILIAN PATTERNS (Mercosul: ABC1D23 or Old: ABC1234)
+            const isOldPattern = hasHyphen || /^[A-Z]{3}[0-9]{4}$/.test(cleanPlate);
+
+            // Both patterns MUST have a number at index 3
+            if (/[A-Z]/.test(chars[3])) {
+              if (chars[3] === 'I') chars[3] = '1';
+              else if (chars[3] === 'O') chars[3] = '0';
+              else if (chars[3] === 'S') chars[3] = '5';
+              else if (chars[3] === 'G') chars[3] = '6';
+              else if (chars[3] === 'B') chars[3] = '8';
+            }
+
+            if (isOldPattern) {
+              // OLD PATTERN: Index 4, 5, 6 MUST be numbers
+              [4, 5, 6].forEach(idx => {
+                if (/[A-Z]/.test(chars[idx])) {
+                  if (chars[idx] === 'I') chars[idx] = '1';
+                  else if (chars[idx] === 'O') chars[idx] = '0';
+                  else if (chars[idx] === 'S') chars[idx] = '5';
+                }
+              });
+            } else {
+              // MERCOSUL PATTERN: Index 4 MUST be a letter
+              if (/[0-9]/.test(chars[4])) {
+                if (chars[4] === '0') chars[4] = 'O';
+                else if (chars[4] === '1') chars[4] = 'I';
+                else if (chars[4] === '5') chars[4] = 'S';
+              }
+              // Index 5, 6 MUST be numbers
+              [5, 6].forEach(idx => {
+                if (/[A-Z]/.test(chars[idx])) {
+                  if (chars[idx] === 'I') chars[idx] = '1';
+                  else if (chars[idx] === 'O') chars[idx] = '0';
+                  else if (chars[idx] === 'S') chars[idx] = '5';
+                }
+              });
+            }
+          } else if (isMercosulAB) {
+            // ARGENTINA/OTHER MERCOSUL (AB123CD)
+            // Index 2, 3, 4 MUST be numbers
+            [2, 3, 4].forEach(idx => {
+              if (/[A-Z]/.test(chars[idx])) {
+                if (chars[idx] === 'I') chars[idx] = '1';
+                else if (chars[idx] === 'O') chars[idx] = '0';
+                else if (chars[idx] === 'S') chars[idx] = '5';
+              }
+            });
+            // Index 5, 6 MUST be letters
+            [5, 6].forEach(idx => {
+              if (/[0-9]/.test(chars[idx])) {
+                if (chars[idx] === '0') chars[idx] = 'O';
+                else if (chars[idx] === '1') chars[idx] = 'I';
+                else if (chars[idx] === '5') chars[idx] = 'S';
+              }
+            });
+          }
+          finalPlate = chars.join('');
+        }
+
+        const nextData = { ...formData, plate: finalPlate };
         setFormData(nextData);
         
         // Trigger validation with the new plate
@@ -326,7 +417,7 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
         }
       } else {
         setPlateScanResult('error');
-        setCameraError("Não foi possível identificar uma placa legível. Tente aproximar mais e manter a câmera estável.");
+        setCameraError("Placa não identificada. Aproxime-se mais, use a lanterna e garanta que a placa esteja centralizada e sem reflexos.");
       }
     } catch (err) {
       console.error("AI Processing Error:", err);
@@ -548,14 +639,14 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
               </div>
             )}
 
-            <div className="flex items-center justify-center gap-8">
+            <div className="flex items-center justify-center gap-6">
               <button 
                 onClick={stopCamera}
-                className="px-6 h-14 rounded-2xl bg-white/5 text-white flex items-center justify-center gap-2 hover:bg-white/10 transition-all active:scale-90 border border-white/10"
+                className="px-5 h-14 rounded-2xl bg-white/5 text-white flex items-center justify-center gap-2 hover:bg-white/10 transition-all active:scale-90 border border-white/10"
                 title="Cancelar"
               >
                 <i className="fas fa-times text-sm"></i>
-                <span className="text-[10px] font-black uppercase tracking-widest">Cancelar</span>
+                <span className="text-[10px] font-black uppercase tracking-widest">Sair</span>
               </button>
               
               <button 
@@ -568,14 +659,25 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
                 </div>
               </button>
 
-              <button 
-                onClick={triggerAutoFocus}
-                className="group relative w-14 h-14 rounded-2xl bg-white/5 text-white flex flex-col items-center justify-center hover:bg-white/10 transition-all active:scale-90"
-                title="Re-focar"
-              >
-                <i className="fas fa-expand text-lg group-hover:scale-110 transition-transform"></i>
-                <span className="absolute -bottom-8 text-[7px] font-black uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity">Auto-Foco</span>
-              </button>
+              <div className="flex flex-col gap-3">
+                <button 
+                  onClick={triggerAutoFocus}
+                  className="w-14 h-14 rounded-2xl bg-white/5 text-white flex items-center justify-center hover:bg-white/10 transition-all active:scale-90 border border-white/10"
+                  title="Re-focar"
+                >
+                  <i className="fas fa-expand text-lg"></i>
+                </button>
+                
+                {cameraCapabilities?.torch && (
+                  <button 
+                    onClick={toggleTorch}
+                    className={`w-14 h-14 rounded-2xl flex items-center justify-center transition-all active:scale-90 border ${isTorchOn ? 'bg-amber-500 text-slate-900 border-amber-400' : 'bg-white/5 text-white border-white/10'}`}
+                    title="Lanterna"
+                  >
+                    <i className={`fas ${isTorchOn ? 'fa-lightbulb' : 'fa-bolt'} text-lg`}></i>
+                  </button>
+                )}
+              </div>
             </div>
           </div>
           
@@ -685,12 +787,12 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.9, y: 20 }}
         transition={{ type: "spring", damping: 25, stiffness: 300 }}
-        className={`${isDarkMode ? 'bg-[#0F1117] border-white/10' : 'bg-white border-slate-200'} rounded-[2.5rem] shadow-2xl w-full max-w-3xl overflow-hidden border relative flex flex-col md:flex-row max-h-[95vh] md:max-h-[90vh]`}
+        className={`${isDarkMode ? 'bg-[#0F1117] border-white/10' : 'bg-white border-slate-200'} rounded-2xl sm:rounded-[2.5rem] shadow-2xl w-full max-w-3xl overflow-hidden border relative flex flex-col md:flex-row max-h-[98vh] md:max-h-[90vh] mx-2`}
       >
         
         {/* TAG LATERAL - IDENTIFICAÇÃO PREMIUM */}
         <div 
-          className={`w-full md:w-24 shrink-0 flex md:flex-col items-center justify-between p-6 md:py-12 transition-all duration-500 border-b md:border-b-0 md:border-r relative ${isDarkMode ? 'border-white/5' : 'border-slate-100'}`}
+          className={`w-full md:w-24 shrink-0 flex md:flex-col items-center justify-between p-4 sm:p-6 md:py-12 transition-all duration-500 border-b md:border-b-0 md:border-r relative ${isDarkMode ? 'border-white/5' : 'border-slate-100'}`}
           style={{ backgroundColor: prismaColor }}
         >
           <div className="absolute inset-0 bg-gradient-to-br from-white/30 to-transparent pointer-events-none opacity-40"></div>
@@ -724,11 +826,11 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
 
         <div className="flex-1 flex flex-col min-w-0 bg-inherit overflow-hidden">
           {/* Header */}
-          <div className={`px-10 py-8 border-b flex justify-between items-center ${isDarkMode ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50/50 border-slate-100'}`}>
+          <div className={`px-5 sm:px-10 py-5 sm:py-8 border-b flex justify-between items-center ${isDarkMode ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50/50 border-slate-100'}`}>
             <div className="relative">
               <div className="flex items-center gap-3 mb-1">
                 <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
-                <h3 className={`text-2xl font-black tracking-tighter uppercase ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                <h3 className={`text-xl sm:text-2xl font-black tracking-tighter uppercase ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
                   {getSlotDisplayName(slotIndex)}
                 </h3>
               </div>
@@ -779,13 +881,13 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
 
           {/* SLA Monitor */}
           {existingVehicle && sla && (
-            <div className={`px-10 py-6 border-b flex flex-col gap-3 ${isDarkMode ? 'bg-white/[0.01] border-white/5' : 'bg-white border-slate-100'}`}>
+            <div className={`px-5 sm:px-10 py-4 sm:py-6 border-b flex flex-col gap-3 ${isDarkMode ? 'bg-white/[0.01] border-white/5' : 'bg-white border-slate-100'}`}>
               <div className="flex justify-between items-end">
                 <div className="flex flex-col gap-1">
                   <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em]">{sla.label}</span>
                   <div className="flex items-center gap-2">
                     <i className={`fas fa-clock ${sla.colorClass} text-sm animate-pulse`}></i>
-                    <span className={`text-2xl font-black tabular-nums tracking-tighter ${sla.colorClass}`}>{sla.formatted}</span>
+                    <span className={`text-xl sm:text-2xl font-black tabular-nums tracking-tighter ${sla.colorClass}`}>{sla.formatted}</span>
                   </div>
                 </div>
                 <div className="text-right">
@@ -802,9 +904,9 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
           )}
 
           {/* Form Content */}
-          <div className="flex-1 overflow-y-auto custom-scrollbar p-10">
-            <form onSubmit={handleSubmit} className="space-y-10">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-5 sm:p-10">
+            <form onSubmit={handleSubmit} className="space-y-6 sm:space-y-10">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8">
                 <div className="space-y-3">
                   <label className="block text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Placa / ID do Veículo/Equipamento</label>
                   <div className="relative group flex gap-2">
@@ -997,6 +1099,34 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
                     </select>
                     <i className="fas fa-chevron-down absolute right-5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none text-xs"></i>
                   </div>
+                  {formData.service && (
+                    <AnimatePresence>
+                      {(() => {
+                        const recommendation = getSmartRecommendation(formData.service);
+                        if (!recommendation) return null;
+                        return (
+                          <motion.div 
+                            initial={{ opacity: 0, height: 0, marginTop: 0 }}
+                            animate={{ opacity: 1, height: 'auto', marginTop: 12 }}
+                            exit={{ opacity: 0, height: 0, marginTop: 0 }}
+                            className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-3 overflow-hidden"
+                          >
+                            <div className="flex items-start gap-3">
+                              <div className="w-5 h-5 rounded-lg bg-blue-500 flex items-center justify-center text-white text-[10px] shrink-0 mt-0.5">
+                                <i className="fas fa-lightbulb"></i>
+                              </div>
+                              <div>
+                                <p className="text-[8px] font-black uppercase text-blue-500 tracking-wider mb-1">Otimização Logística</p>
+                                <p className="text-[9px] font-bold text-slate-500 leading-tight">
+                                  {recommendation.description}
+                                </p>
+                              </div>
+                            </div>
+                          </motion.div>
+                        );
+                      })()}
+                    </AnimatePresence>
+                  )}
                   {errors.service && (
                     <p className="text-[9px] font-black text-red-500 uppercase tracking-widest ml-1 animate-pulse">{errors.service}</p>
                   )}

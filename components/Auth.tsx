@@ -147,8 +147,66 @@ const Auth: React.FC<AuthProps> = ({ onLogin, isDarkMode, isResettingPassword, o
   };
 
   const handleFingerprintLogin = async () => {
-    // In a real app with Supabase, we would use WebAuthn
-    setError('A autenticação por digital via Supabase requer configuração de WebAuthn.');
+    setError('');
+    setLoading(true);
+
+    try {
+      // 1. Check if browser supports Credential Management API
+      if (!navigator.credentials || !navigator.credentials.get) {
+        throw new Error('Seu navegador não suporta autenticação biométrica nativa.');
+      }
+
+      // 2. Try to get saved credentials. This will trigger the native OS biometric prompt (FaceID/Fingerprint)
+      // if credentials were saved previously for this domain.
+      const credential = await navigator.credentials.get({
+        password: true,
+        // We could also suggest "conditional" UI for newer browsers
+        mediation: 'optional'
+      }) as PasswordCredential | null;
+
+      if (credential && credential.id && credential.password) {
+        setEmail(credential.id);
+        setPassword(credential.password);
+        
+        // 3. Perform login with retrieved credentials
+        const { data, error: signInError } = await supabase.auth.signInWithPassword({
+          email: credential.id.trim(),
+          password: credential.password,
+        });
+
+        if (signInError) throw signInError;
+        
+        if (data.user) {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', data.user.id)
+            .single();
+
+          onLogin({
+            id: data.user.id,
+            name: profile?.name || data.user.email?.split('@')[0] || 'Usuário',
+            email: data.user.email || '',
+            recoveryEmail: profile?.recovery_email || '',
+            fingerprintEnabled: profile?.fingerprint_enabled || false,
+            createdAt: data.user.created_at
+          });
+        }
+      } else {
+        setError('Nenhuma credencial digital encontrada. Por favor, entre com e-mail e senha primeiro e salve-os no seu dispositivo.');
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Erro na autenticação biométrica.';
+      console.error('Biometric error:', err);
+      // Fallback message for mobile users
+      if (message.includes('not supported') || message.includes('navigator.credentials')) {
+        setError('O acesso por digital requer que você já tenha salvo sua senha no navegador ou sistema do celular.');
+      } else {
+        setError(message);
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleMagicLink = async (e: React.FormEvent) => {
@@ -409,6 +467,8 @@ const Auth: React.FC<AuthProps> = ({ onLogin, isDarkMode, isResettingPassword, o
                 <i className="fas fa-envelope absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"></i>
                 <input 
                   type="email" 
+                  name="email"
+                  autoComplete={isLogin ? "username" : "email"}
                   placeholder="E-mail Corporativo"
                   required
                   className={`w-full h-14 pl-12 pr-4 rounded-2xl border-2 outline-none font-bold transition-all ${isDarkMode ? 'bg-white/5 border-white/5 text-white focus:border-blue-500/50' : 'bg-slate-50 border-slate-200 text-slate-900 focus:border-blue-500'}`}
@@ -421,6 +481,8 @@ const Auth: React.FC<AuthProps> = ({ onLogin, isDarkMode, isResettingPassword, o
                 <i className="fas fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"></i>
                 <input 
                   type="password" 
+                  name="password"
+                  autoComplete={isLogin ? "current-password" : "new-password"}
                   placeholder="Senha"
                   required
                   className={`w-full h-14 pl-12 pr-4 rounded-2xl border-2 outline-none font-bold transition-all ${isDarkMode ? 'bg-white/5 border-white/5 text-white focus:border-blue-500/50' : 'bg-slate-50 border-slate-200 text-slate-900 focus:border-blue-500'}`}

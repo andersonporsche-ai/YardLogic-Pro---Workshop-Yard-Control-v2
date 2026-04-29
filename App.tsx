@@ -703,7 +703,17 @@ const App: React.FC = () => {
   };
 
   const handleSaveVehicle = async (vehicle: Vehicle) => {
-    // 1. Identify which yard this vehicle belongs to
+    const allYardPools = [
+      { id: 'yard', setter: setVehicles, logSetter: setLogs },
+      { id: 'yard2', setter: setVehicles2, logSetter: setLogs2 },
+      { id: 'yard3', setter: setVehicles3, logSetter: setLogs3 },
+      { id: 'yard4', setter: setVehicles4, logSetter: setLogs4 },
+      { id: 'yardP1', setter: setVehiclesP1, logSetter: setLogsP1 },
+      { id: 'yardP2', setter: setVehiclesP2, logSetter: setLogsP2 },
+      { id: 'yardP6', setter: setVehiclesP6, logSetter: setLogsP6 },
+      { id: 'yardCob', setter: setVehiclesCob, logSetter: setLogsCob },
+    ];
+
     const yardPools = [
       { id: 'yard', vehicles: vehicles, setter: setVehicles, logSetter: setLogs },
       { id: 'yard2', vehicles: vehicles2, setter: setVehicles2, logSetter: setLogs2 },
@@ -715,35 +725,54 @@ const App: React.FC = () => {
       { id: 'yardCob', vehicles: vehiclesCob, setter: setVehiclesCob, logSetter: setLogsCob },
     ];
 
-    const currentInPool = yardPools.find(p => p.vehicles.some(v => v.id === vehicle.id));
-    const targetId = currentInPool ? currentInPool.id : (activeTab === 'dashboard' || activeTab === 'tasks' ? 'yard' : activeTab);
-    const targetYardId = targetId as YardTab;
+    // Find where the vehicle currently is in the UI
+    const currentPool = yardPools.find(p => p.vehicles.some(v => v.id === vehicle.id));
+    
+    // Determine where it SHOULD be
+    // If we're on a dashboard/tasks tab, it stays where it is, or goes to 'yard' if new.
+    // If we're on a specific yard tab, it goes to that yard.
+    let targetYardId: YardTab;
+    if (activeTab === 'dashboard' || activeTab === 'tasks' || activeTab === 'idleHistory') {
+      targetYardId = (currentPool?.id as YardTab) || 'yard';
+    } else {
+      targetYardId = activeTab;
+    }
 
     try {
       await databaseService.saveVehicle(vehicle, targetYardId);
     } catch (error) {
-      console.error('Erro ao salvar no Supabase:', error);
+      console.error('Erro crítico ao salvar no Supabase:', error);
       addToast({ 
-        title: 'Sincronização Pendente', 
-        message: 'Dados salvos localmente, mas falharam ao enviar ao servidor.', 
-        type: 'warning' 
+        title: 'ERRO NA GRAVAÇÃO', 
+        message: 'O servidor não respondeu. Tente novamente ou verifique sua conexão.', 
+        type: 'error' 
       });
+      // Don't close form if save failed? 
+      // For now we still proceed locally but showing a louder error
     }
 
     const nowISO = new Date().toISOString();
-    const existingVehicle = currentInPool?.vehicles.find(v => v.id === vehicle.id);
-    const exists = !!existingVehicle;
+    const existingVehicle = currentPool?.vehicles.find(v => v.id === vehicle.id);
+    const existsInAnyPool = !!currentPool;
     
-    if (exists && existingVehicle && (existingVehicle.washStatus !== vehicle.washStatus || existingVehicle.deliveryStatus !== vehicle.deliveryStatus)) {
+    // Handle status change tracking
+    if (existingVehicle && (existingVehicle.washStatus !== vehicle.washStatus || existingVehicle.deliveryStatus !== vehicle.deliveryStatus)) {
       vehicle.statusChangedAt = nowISO;
       setNotifiedVehicleIds(prev => {
         const next = new Set(prev);
         next.delete(vehicle.id);
         return next;
       });
+    } else if (!existsInAnyPool) {
+      vehicle.statusChangedAt = nowISO;
+    }
 
-      // Notification for 'Veículo Pronto'
-      if (vehicle.washStatus === 'Veículo Pronto' && existingVehicle.washStatus !== 'Veículo Pronto') {
+    const getYardName = (id: string) => DEFAULT_YARD_OPTIONS.find(o => o.id === id)?.label || 'Pátio';
+
+    // Notification for 'Veículo Pronto'
+    if (vehicle.washStatus === 'Veículo Pronto') {
+      const isNewlyReady = !existingVehicle || existingVehicle.washStatus !== 'Veículo Pronto';
+      if (isNewlyReady) {
         const slotName = vehicle.slotIndex + 1;
         const yardName = getYardName(targetYardId);
         const consultantInfo = vehicle.consultant ? ` (Consultor: ${vehicle.consultant})` : '';
@@ -753,29 +782,21 @@ const App: React.FC = () => {
           message: `O veículo ${vehicle.model} (${vehicle.plate}) na vaga ${slotName} no ${yardName} agora está pronto.${consultantInfo}`,
           type: 'success'
         });
-      }
-    } else if (!exists) {
-      vehicle.statusChangedAt = nowISO;
-      
-      // Also notify if created directly as Ready
-      if (vehicle.washStatus === 'Veículo Pronto') {
-        const slotName = vehicle.slotIndex + 1;
-        const yardName = getYardName(targetYardId);
-        
-        addToast({
-          title: 'Veículo Pronto Registrado',
-          message: `Novo veículo ${vehicle.model} (${vehicle.plate}) na vaga ${slotName} (${yardName}) já está PRONTO.`,
-          type: 'success'
-        });
+
+        // Trigger native notification if permitted
+        if ('Notification' in window && Notification.permission === 'granted') {
+          new Notification('Veículo Pronto', {
+            body: `${vehicle.model} (${vehicle.plate}) na vaga ${slotName} (${yardName}) está pronto para entrega.`,
+            icon: '/favicon.ico'
+          });
+        }
       }
     }
 
-    const logAction: 'entry' | 'status_change' | 'exit' = exists ? 'status_change' : 'entry';
-    const logDetails = exists 
+    const logAction: 'entry' | 'status_change' | 'exit' = existsInAnyPool ? 'status_change' : 'entry';
+    const logDetails = existsInAnyPool 
       ? `Atualização: ${vehicle.washStatus} | ${vehicle.deliveryStatus}` 
       : `Entrada registrada na vaga ${vehicle.slotIndex + 1}`;
-
-    const getYardName = (id: string) => DEFAULT_YARD_OPTIONS.find(o => o.id === id)?.label || 'Pátio';
 
     const newLog: ActivityLog = {
       id: Math.random().toString(36).substr(2, 9).toUpperCase(),
@@ -795,32 +816,39 @@ const App: React.FC = () => {
 
     vehicle.yardId = targetYardId;
 
-    // Update state using functional updates
-    const targetPool = yardPools.find(p => p.id === targetYardId);
+    // 1. Remove from OLD pool if it moved
+    if (currentPool && currentPool.id !== targetYardId) {
+      currentPool.setter(prev => prev.filter(v => v.id !== vehicle.id));
+    }
+
+    // 2. Add or Update in TARGET pool
+    const targetPool = allYardPools.find(p => p.id === targetYardId);
     if (targetPool) {
       targetPool.logSetter(prev => [newLog, ...prev]);
-      if (exists) {
-        targetPool.setter(prev => prev.map(v => v.id === vehicle.id ? vehicle : v));
-      } else {
-        targetPool.setter(prev => [...prev, vehicle]);
-        
-        // Remove from empty slots tracking
-        setSlotEmptySince(prev => {
-          const next = { ...prev };
-          if (next[targetYardId]) {
-            const newYardMap = { ...next[targetYardId] };
-            delete newYardMap[vehicle.slotIndex];
-            next[targetYardId] = newYardMap;
-          }
-          return next;
-        });
-        
-        setNotifiedEmptySlots(prev => {
-          const next = new Set(prev);
-          next.delete(`${targetYardId}-${vehicle.slotIndex}`);
-          return next;
-        });
-      }
+      targetPool.setter(prev => {
+        const exists = prev.some(v => v.id === vehicle.id);
+        if (exists) {
+          return prev.map(v => v.id === vehicle.id ? vehicle : v);
+        }
+        return [...prev, vehicle];
+      });
+
+      // Clear empty slots tracking for target slot
+      setSlotEmptySince(prev => {
+        const next = { ...prev };
+        if (next[targetYardId]) {
+          const newYardMap = { ...next[targetYardId] };
+          delete newYardMap[vehicle.slotIndex];
+          next[targetYardId] = newYardMap;
+        }
+        return next;
+      });
+      
+      setNotifiedEmptySlots(prev => {
+        const next = new Set(prev);
+        next.delete(`${targetYardId}-${vehicle.slotIndex}`);
+        return next;
+      });
     }
 
     setIsFormOpen(false);
@@ -1183,15 +1211,15 @@ const App: React.FC = () => {
           </div>
       </aside>
 
-      <main className="flex-1 p-4 md:p-10 overflow-hidden flex flex-col gap-8">
-        <header className="no-print flex flex-col xl:flex-row xl:items-center justify-between gap-8 shrink-0">
+      <main className="flex-1 p-3 sm:p-6 md:p-10 overflow-x-hidden overflow-y-auto flex flex-col gap-4 sm:gap-8 min-w-0">
+        <header className="no-print flex flex-col xl:flex-row xl:items-center justify-between gap-6 sm:gap-8 shrink-0">
           <div className="relative">
             <div className="absolute -left-4 top-0 bottom-0 w-1 bg-blue-600 rounded-full opacity-50"></div>
             <motion.h2 
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.8, ease: "easeOut" }}
-              className={`text-5xl font-outfit font-black uppercase tracking-tighter leading-[0.9] mb-2 transition-all ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
+              className={`text-3xl sm:text-4xl md:text-5xl font-outfit font-black uppercase tracking-tighter leading-[0.9] mb-2 transition-all ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
             >
               Logística de <span className="text-blue-600">Pátios</span> <motion.span 
                 animate={{ opacity: [0.3, 0.6, 0.3] }}
@@ -1199,7 +1227,7 @@ const App: React.FC = () => {
                 className="opacity-40"
               >Porsche</motion.span>
             </motion.h2>
-            <div className="flex items-center gap-4">
+            <div className="flex flex-wrap items-center gap-3 sm:gap-4">
               <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${isDarkMode ? 'bg-white/10 text-blue-400' : 'bg-slate-900 text-white'}`}>
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
@@ -1216,15 +1244,15 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-3 sm:gap-4">
             {/* Seletor de Pátio na Barra Superior */}
             <div className="relative">
               <button 
                 onClick={() => setIsYardSelectorOpen(!isYardSelectorOpen)}
-                className={`h-14 px-8 rounded-2xl flex items-center gap-4 font-black text-[10px] uppercase tracking-widest border transition-all hover:scale-105 active:scale-95 shadow-lg ${isDarkMode ? 'bg-[#161922] border-white/10 text-white' : 'bg-white border-slate-200 text-slate-900'}`}
+                className={`h-11 sm:h-14 px-4 sm:px-8 rounded-xl sm:rounded-2xl flex items-center gap-2 sm:gap-4 font-black text-[9px] sm:text-[10px] uppercase tracking-widest border transition-all hover:scale-105 active:scale-95 shadow-lg ${isDarkMode ? 'bg-[#161922] border-white/10 text-white' : 'bg-white border-slate-200 text-slate-900'}`}
               >
                 <i className="fas fa-map-marker-alt text-blue-500"></i>
-                <span className="hidden sm:inline">Pátio:</span> {currentYardLabel}
+                <span>{currentYardLabel}</span>
                 <i className={`fas fa-chevron-down transition-transform duration-300 ${isYardSelectorOpen ? 'rotate-180' : ''}`}></i>
               </button>
 
@@ -1257,10 +1285,11 @@ const App: React.FC = () => {
 
             <button 
               onClick={() => setIsPrismaScannerOpen(true)}
-              className={`h-14 px-8 rounded-2xl flex items-center gap-4 font-black text-[10px] uppercase tracking-widest border transition-all hover:scale-105 active:scale-95 shadow-lg ${isDarkMode ? 'bg-blue-600 border-blue-500 text-white shadow-blue-600/20' : 'bg-blue-600 border-blue-500 text-white shadow-blue-600/20'}`}
+              className={`h-11 sm:h-14 px-4 sm:px-8 rounded-xl sm:rounded-2xl flex items-center gap-2 sm:gap-4 font-black text-[9px] sm:text-[10px] uppercase tracking-widest border transition-all hover:scale-105 active:scale-95 shadow-lg ${isDarkMode ? 'bg-blue-600 border-blue-500 text-white shadow-blue-600/20' : 'bg-blue-600 border-blue-500 text-white shadow-blue-600/20'}`}
             >
               <i className="fas fa-qrcode text-base"></i>
-              Identificar Veículo/Equipamento
+              <span className="hidden xs:inline">Identificar</span>
+              <span className="xs:hidden">Scanner</span>
             </button>
 
             <OptimizationSuggestions 
@@ -1270,29 +1299,29 @@ const App: React.FC = () => {
 
             <button 
               onClick={generatePDFReport}
-              className={`h-14 px-8 rounded-2xl flex items-center gap-4 font-black text-[10px] uppercase tracking-widest border transition-all hover:scale-105 active:scale-95 shadow-lg ${isDarkMode ? 'bg-[#161922] border-white/10 text-emerald-500' : 'bg-white border-slate-200 text-emerald-600'}`}
+              className={`h-11 sm:h-14 px-4 sm:px-8 rounded-xl sm:rounded-2xl flex items-center gap-2 sm:gap-4 font-black text-[9px] sm:text-[10px] uppercase tracking-widest border transition-all hover:scale-105 active:scale-95 shadow-lg ${isDarkMode ? 'bg-[#161922] border-white/10 text-emerald-500' : 'bg-white border-slate-200 text-emerald-600'}`}
               title="Gerar Relatório Consolidado (PDF)"
             >
               <i className="fas fa-file-pdf text-base"></i>
-              Relatório
+              <span className="hidden sm:inline">Relatório</span>
             </button>
 
             <button 
               onClick={cycleTheme}
-              className={`h-14 px-8 rounded-2xl flex items-center gap-4 font-black text-[10px] uppercase tracking-widest border transition-all hover:scale-105 active:scale-95 shadow-lg ${isDarkMode ? 'bg-[#161922] border-white/10 text-blue-400' : 'bg-white border-slate-200 text-slate-600'}`}
+              className={`h-11 h-14 px-4 sm:px-8 rounded-xl sm:rounded-2xl flex items-center gap-2 sm:gap-4 font-black text-[9px] sm:text-[10px] uppercase tracking-widest border transition-all hover:scale-105 active:scale-95 shadow-lg ${isDarkMode ? 'bg-[#161922] border-white/10 text-blue-400' : 'bg-white border-slate-200 text-slate-600'}`}
             >
               <i className={`fas ${themeMode === 'auto' ? 'fa-clock' : (themeMode === 'light' ? 'fa-sun' : 'fa-moon')} text-base`}></i>
-              {themeMode === 'auto' ? 'Tema: Auto' : themeMode}
+              <span className="hidden sm:inline">{themeMode === 'auto' ? 'Tema: Auto' : themeMode}</span>
             </button>
 
             <button 
               onClick={toggleFullscreen}
-              className={`w-14 h-14 rounded-2xl shadow-lg flex items-center justify-center transition-all active:scale-95 border ${isDarkMode ? 'bg-[#161922] border-white/10 text-slate-400 hover:text-blue-500' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+              className={`w-11 sm:w-14 h-11 sm:h-14 rounded-xl sm:rounded-2xl shadow-lg flex items-center justify-center transition-all active:scale-95 border ${isDarkMode ? 'bg-[#161922] border-white/10 text-slate-400 hover:text-blue-500' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
             >
-              <i className={`fas ${isFullscreen ? 'fa-compress-arrows-alt' : 'fa-expand-arrows-alt'} text-xl`}></i>
+              <i className={`fas ${isFullscreen ? 'fa-compress-arrows-alt' : 'fa-expand-arrows-alt'} text-sm sm:text-xl`}></i>
             </button>
 
-            <div className={`flex items-center gap-5 p-4 px-8 rounded-2xl shadow-xl border transition-all ${isDarkMode ? 'bg-[#161922] border-white/10' : 'bg-white border-slate-200'}`}>
+            <div className={`hidden lg:flex items-center gap-5 p-4 px-8 rounded-2xl shadow-xl border transition-all ${isDarkMode ? 'bg-[#161922] border-white/10' : 'bg-white border-slate-200'}`}>
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-white font-black text-xs shadow-lg">
                   {currentUser?.name.charAt(0)}
@@ -1314,7 +1343,7 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        <div className={`flex-1 min-h-0 rounded-[3.5rem] shadow-2xl border transition-all duration-1000 overflow-hidden ${isDarkMode ? 'bg-[#0A0B10] border-white/5' : 'bg-white border-slate-200'}`}>
+        <div className={`flex-1 min-h-0 rounded-[1.5rem] sm:rounded-[2.5rem] md:rounded-[3.5rem] shadow-2xl border transition-all duration-1000 overflow-hidden ${isDarkMode ? 'bg-[#0A0B10] border-white/5' : 'bg-white border-slate-200'}`}>
           {activeTab === 'yard' || activeTab === 'yard2' || activeTab === 'yard3' || activeTab === 'yard4' || activeTab === 'yardP1' || activeTab === 'yardP2' || activeTab === 'yardP6' || activeTab === 'yardCob' ? (
             <YardView 
               vehicles={currentVehicles} 

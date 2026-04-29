@@ -115,23 +115,25 @@ export const databaseService = {
     };
   },
   mapVehicleToDb(v: Vehicle, yardId: string) {
+    // Ensure required fields have fallbacks to prevent Supabase NOT NULL constraint errors
+    const now = new Date().toISOString();
     return {
       id: v.id,
-      plate: v.plate,
-      registration_time: v.registrationTime,
-      entry_time: v.entryTime,
-      status_changed_at: v.statusChangedAt,
-      exit_time: v.exitTime || null,
-      model: v.model,
-      customer: v.customer,
-      prisma_number: v.prisma.number,
-      prisma_color: v.prisma.color,
-      consultant: v.consultant,
-      service: v.service,
-      wash_status: v.washStatus,
-      delivery_status: v.deliveryStatus,
-      slot_index: v.slotIndex,
-      yard_id: yardId
+      plate: v.plate || 'SEM-PLACA',
+      registration_time: v.registrationTime || v.entryTime || now,
+      entry_time: v.entryTime || now,
+      status_changed_at: v.statusChangedAt || v.entryTime || now,
+      exit_time: v.exitTime && v.exitTime.trim() !== '' ? v.exitTime : null,
+      model: v.model || 'Não Informado',
+      customer: v.customer || 'Não Informado',
+      prisma_number: v.prisma?.number || 0,
+      prisma_color: v.prisma?.color || '#3b82f6',
+      consultant: v.consultant || 'Gabriel Alex', // Default fallback
+      service: v.service || 'Mecânica Geral',
+      wash_status: v.washStatus || 'Não Solicitado',
+      delivery_status: v.deliveryStatus || 'Aguardando Liberação',
+      slot_index: v.slotIndex ?? 0,
+      yard_id: yardId || v.yardId || 'yard'
     };
   },
 
@@ -153,12 +155,13 @@ export const databaseService = {
     slot_index: number;
     yard_id: string;
   }): Vehicle {
+    const now = new Date().toISOString();
     return {
       id: v.id,
       plate: v.plate,
-      registrationTime: v.registration_time,
-      entryTime: v.entry_time,
-      statusChangedAt: v.status_changed_at,
+      registrationTime: v.registration_time || v.entry_time || now,
+      entryTime: v.entry_time || now,
+      statusChangedAt: v.status_changed_at || v.entry_time || now,
       exitTime: v.exit_time || undefined,
       model: v.model,
       customer: v.customer,

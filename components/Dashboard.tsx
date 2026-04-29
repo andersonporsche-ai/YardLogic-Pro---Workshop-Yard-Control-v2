@@ -4,6 +4,7 @@ import { Vehicle, ActivityLog } from '../types';
 import { motion } from 'motion/react';
 import { MAX_SLOTS, CONSULTANTS, ALERT_THRESHOLDS } from '../constants';
 import { getYardInsights, getStrategicOptimization, getLayoutAndFlowOptimization } from '../services/geminiService';
+import { analyzeYardEfficiency } from '../services/yardOptimization';
 import { toPng } from 'html-to-image';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
@@ -177,6 +178,8 @@ const Dashboard: React.FC<DashboardProps> = ({
       return { yardName, hours };
     });
 
+    const efficiency = analyzeYardEfficiency(vehicles);
+
     return { 
       occupiedCount: vehicles.length, 
       consultantData, 
@@ -189,7 +192,8 @@ const Dashboard: React.FC<DashboardProps> = ({
       hourData,
       topPeaks,
       turnoverRate,
-      heatmapData
+      heatmapData,
+      efficiency
     };
   }, [vehicles, activityLogs, allYardsData]);
 
@@ -265,30 +269,42 @@ const Dashboard: React.FC<DashboardProps> = ({
   };
 
   return (
-    <div className={`flex flex-col gap-6 h-full overflow-y-auto custom-scrollbar transition-colors duration-700 p-8 ${isDarkMode ? 'bg-[#07080C]' : 'bg-[#F9FAFB]'}`}>
+    <div className={`flex flex-col gap-4 sm:gap-6 h-full overflow-y-auto custom-scrollbar transition-colors duration-700 p-4 sm:p-6 md:p-8 ${isDarkMode ? 'bg-[#07080C]' : 'bg-[#F9FAFB]'}`}>
       
       {/* 1. Header de Status Crítico */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className={`p-8 rounded-[2.8rem] border flex items-center justify-between gap-6 transition-all ${isDarkMode ? 'bg-red-500/5 border-red-500/20 shadow-[0_0_30px_rgba(239,68,44,0.05)]' : 'bg-red-50 border-red-100'}`}>
-           <div className="flex items-center gap-6">
-              <div className={`w-16 h-16 rounded-3xl flex items-center justify-center text-white shadow-lg ${stats.healthData[2].value > 0 ? 'bg-red-500 animate-pulse' : 'bg-emerald-500'}`}>
-                 <i className={`fas ${stats.healthData[2].value > 0 ? 'fa-exclamation-triangle' : 'fa-check-circle'} text-2xl`}></i>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+        <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border flex items-center justify-between gap-4 sm:gap-6 transition-all ${isDarkMode ? 'bg-red-500/5 border-red-500/20 shadow-[0_0_30px_rgba(239,68,44,0.05)]' : 'bg-red-50 border-red-100'}`}>
+           <div className="flex items-center gap-4 sm:gap-6">
+              <div className={`w-12 h-12 md:w-16 md:h-16 rounded-2xl md:rounded-3xl flex items-center justify-center text-white shadow-lg ${stats.healthData[2].value > 0 ? 'bg-red-500 animate-pulse' : 'bg-emerald-500'}`}>
+                 <i className={`fas ${stats.healthData[2].value > 0 ? 'fa-exclamation-triangle' : 'fa-check-circle'} text-xl md:text-2xl`}></i>
               </div>
               <div>
-                 <h3 className={`text-xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{stats.healthData[2].value} Críticos / {stats.occupiedCount} Ativos</h3>
-                 <p className="text-slate-500 text-sm font-medium uppercase tracking-widest">Estado da Operação em Tempo Real</p>
+                 <h3 className={`text-lg md:text-xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{stats.healthData[2].value} Críticos / {stats.occupiedCount} Ativos</h3>
+                 <p className="text-slate-500 text-[10px] md:text-sm font-medium uppercase tracking-widest">Estado da Operação</p>
               </div>
            </div>
         </div>
 
-        <div className={`p-8 rounded-[2.8rem] border flex items-center justify-between gap-6 transition-all ${isDarkMode ? 'bg-emerald-500/5 border-emerald-500/20 shadow-[0_0_30px_rgba(16,185,129,0.05)]' : 'bg-emerald-50 border-emerald-100'}`}>
-           <div className="flex items-center gap-6">
-              <div className={`w-16 h-16 rounded-3xl flex items-center justify-center text-white shadow-lg ${vehicles.some(v => v.washStatus === 'Veículo Pronto') ? 'bg-emerald-500 animate-bounce' : 'bg-slate-500'}`}>
-                 <i className="fas fa-flag-checkered text-2xl"></i>
+        <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border flex items-center justify-between gap-4 sm:gap-6 transition-all ${isDarkMode ? 'bg-emerald-500/5 border-emerald-500/20 shadow-[0_0_30px_rgba(16,185,129,0.05)]' : 'bg-emerald-50 border-emerald-100'}`}>
+           <div className="flex items-center gap-4 sm:gap-6">
+              <div className={`w-12 h-12 md:w-16 md:h-16 rounded-2xl md:rounded-3xl flex items-center justify-center text-white shadow-lg ${vehicles.some(v => v.washStatus === 'Veículo Pronto') ? 'bg-emerald-500 animate-bounce' : 'bg-slate-500'}`}>
+                 <i className="fas fa-flag-checkered text-xl md:text-2xl"></i>
               </div>
               <div>
-                 <h3 className={`text-xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{vehicles.filter(v => v.washStatus === 'Veículo Pronto').length} Aguardando Liberação</h3>
-                 <p className="text-slate-500 text-sm font-medium uppercase tracking-widest">Veículos Prontos para Entrega</p>
+                 <h3 className={`text-lg md:text-xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{vehicles.filter(v => v.washStatus === 'Veículo Pronto').length} Prontos</h3>
+                 <p className="text-slate-500 text-[10px] md:text-sm font-medium uppercase tracking-widest">Aguardando Liberação</p>
+              </div>
+           </div>
+        </div>
+
+        <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border flex items-center justify-between gap-4 sm:gap-6 transition-all ${isDarkMode ? 'bg-blue-500/5 border-blue-500/20 shadow-[0_0_30px_rgba(59,130,246,0.05)]' : 'bg-blue-50 border-blue-100'}`}>
+           <div className="flex items-center gap-4 sm:gap-6">
+              <div className={`w-12 h-12 md:w-16 md:h-16 rounded-2xl md:rounded-3xl flex items-center justify-center text-white shadow-lg ${stats.efficiency.efficiencyScore >= 80 ? 'bg-blue-500' : 'bg-amber-500 animate-pulse'}`}>
+                 <i className="fas fa-route text-xl md:text-2xl"></i>
+              </div>
+              <div>
+                 <h3 className={`text-lg md:text-xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{stats.efficiency.efficiencyScore}% Eficiência</h3>
+                 <p className="text-slate-500 text-[10px] md:text-sm font-medium uppercase tracking-widest">Fluxo de Logística</p>
               </div>
            </div>
         </div>
@@ -296,18 +312,18 @@ const Dashboard: React.FC<DashboardProps> = ({
 
       {/* 1.1 Lista de Veículos Aguardando Liberação */}
       {vehicles.some(v => v.washStatus === 'Veículo Pronto') && (
-        <div className={`p-8 rounded-[2.8rem] border transition-all ${isDarkMode ? 'bg-white/[0.02] border-white/5' : 'bg-white border-slate-100 shadow-sm'}`}>
+        <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border transition-all ${isDarkMode ? 'bg-white/[0.02] border-white/5' : 'bg-white border-slate-100 shadow-sm'}`}>
           <div className="flex items-center gap-4 mb-6">
             <div className="w-10 h-10 rounded-xl bg-emerald-500 flex items-center justify-center text-white shadow-lg shadow-emerald-500/20">
               <i className="fas fa-truck-loading"></i>
             </div>
             <div>
-              <h4 className={`text-sm font-black uppercase tracking-widest ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Veículos Aguardando Liberação</h4>
-              <p className="text-[10px] text-emerald-500 font-bold uppercase tracking-tight">Liberar vagas para novos atendimentos</p>
+              <h4 className={`text-xs sm:text-sm font-black uppercase tracking-widest ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Veículos Aguardando Liberação</h4>
+              <p className="text-[10px] text-emerald-500 font-bold uppercase tracking-tight">Vagas para novos atendimentos</p>
             </div>
           </div>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
             {vehicles.filter(v => v.washStatus === 'Veículo Pronto').map(v => (
               <div key={v.id} className={`p-4 rounded-2xl border flex items-center gap-4 transition-all hover:scale-[1.02] ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
                 <div className="w-12 h-12 rounded-xl bg-slate-900 text-white flex items-center justify-center text-xs font-black shadow-md border-2" style={{ borderColor: v.prisma.color }}>
@@ -324,15 +340,51 @@ const Dashboard: React.FC<DashboardProps> = ({
         </div>
       )}
 
+      {/* 1.2 Sugestões de Realocação (Otimização de Fluxo) */}
+      {stats.efficiency.misplacedVehicles.length > 0 && (
+        <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border transition-all ${isDarkMode ? 'bg-blue-500/[0.03] border-blue-500/10' : 'bg-blue-50/50 border-blue-100 shadow-sm'}`}>
+          <div className="flex items-center gap-4 mb-6">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
+              <i className="fas fa-route text-xs sm:text-base"></i>
+            </div>
+            <div>
+              <h4 className={`text-xs sm:text-sm font-black uppercase tracking-widest ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Sugestões de Realocação</h4>
+              <p className="text-[10px] text-blue-500 font-bold uppercase tracking-tight">Otimizar pátio por serviço</p>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+            {stats.efficiency.misplacedVehicles.slice(0, 6).map(v => (
+              <div key={v.id} className={`p-4 rounded-2xl border flex items-center gap-4 transition-all hover:scale-[1.02] ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-white border-blue-200'}`}>
+                <div className="w-10 h-10 rounded-xl bg-blue-100 text-blue-600 flex items-center justify-center text-xs shadow-inner">
+                  <i className="fas fa-exchange-alt"></i>
+                </div>
+                <div className="flex flex-col min-w-0">
+                  <h5 className={`text-xs font-black uppercase truncate ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>{v.model}</h5>
+                  <p className="text-[9px] font-bold text-slate-500 uppercase mt-0.5">
+                    Mover para: <span className="text-blue-600">
+                      {stats.efficiency.recommendations.find(r => r.vehicleId === v.id)?.suggestedYards.map(y => 
+                        y === 'yard' ? 'Sub Solo' : y.replace('yard', 'Pátio ')
+                      ).join(', ')}
+                    </span>
+                  </p>
+                  <span className="text-[8px] font-black italic text-slate-400 mt-1 uppercase tracking-tighter">Serviço: {v.service}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* 2. Yard Occupancy Chart */}
-      <div className={`p-8 rounded-[2.8rem] border shadow-sm transition-colors ${isDarkMode ? 'bg-[#12141C] border-white/5' : 'bg-white border-slate-100'}`}>
+      <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border shadow-sm transition-colors ${isDarkMode ? 'bg-[#12141C] border-white/5' : 'bg-white border-slate-100'}`}>
         <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-8 gap-6">
           <div className="flex items-center gap-4">
             <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
-              <i className="fas fa-warehouse"></i>
+              <i className="fas fa-warehouse text-base"></i>
             </div>
             <div>
-              <h3 className={`text-sm font-black uppercase tracking-widest ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Ocupação por Pátio</h3>
+              <h3 className={`text-xs sm:text-sm font-black uppercase tracking-widest ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Ocupação por Pátio</h3>
               <p className="text-[10px] text-slate-500 font-bold uppercase tracking-tight">Distribuição de Veículos e Capacidade</p>
             </div>
           </div>
@@ -340,12 +392,16 @@ const Dashboard: React.FC<DashboardProps> = ({
           <div className="flex flex-wrap items-center gap-4 no-print">
             <div className="hidden sm:flex items-center gap-6 mr-4 border-r border-slate-500/10 pr-6">
               <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-blue-500"></div>
-                <span className="text-[9px] font-black text-slate-500 uppercase">Ocupado</span>
+                <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+                <span className="text-[9px] font-black text-slate-500 uppercase">Baixo (&lt;60%)</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-slate-200 dark:bg-white/10"></div>
-                <span className="text-[9px] font-black text-slate-500 uppercase">Capacidade</span>
+                <div className="w-2 h-2 rounded-full bg-amber-500"></div>
+                <span className="text-[9px] font-black text-slate-500 uppercase">Médio (60-90%)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                <span className="text-[9px] font-black text-slate-500 uppercase">Alto (&gt;90%)</span>
               </div>
             </div>
 
@@ -402,7 +458,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                           </div>
                           <div className="flex justify-between gap-8 pt-1 border-t border-white/5 mt-1">
                             <span className="text-[9px] font-bold uppercase text-slate-400">Ocupação:</span>
-                            <span className={`text-[11px] font-black font-mono ${data.percentage > 90 ? 'text-red-500' : data.percentage > 70 ? 'text-orange-500' : 'text-blue-500'}`}>
+                            <span className={`text-[11px] font-black font-mono ${data.percentage >= 90 ? 'text-red-500' : data.percentage >= 60 ? 'text-orange-500' : 'text-emerald-500'}`}>
                               {data.percentage.toFixed(1)}%
                             </span>
                           </div>
@@ -434,7 +490,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                 {stats.yardOccupancyData.map((entry, index) => (
                   <Cell 
                     key={`cell-${index}`} 
-                    fill={entry.percentage > 90 ? '#ef4444' : entry.percentage > 70 ? '#f59e0b' : '#3b82f6'} 
+                    fill={entry.percentage >= 90 ? '#ef4444' : entry.percentage >= 60 ? '#f59e0b' : '#10b981'} 
                     className="hover:opacity-80 transition-opacity"
                   />
                 ))}
@@ -444,14 +500,73 @@ const Dashboard: React.FC<DashboardProps> = ({
         </div>
       </div>
 
-      {/* 2.1 Heatmap de Densidade */}
-      <div className={`p-8 rounded-[2.8rem] border shadow-sm transition-colors ${isDarkMode ? 'bg-[#12141C] border-white/5' : 'bg-white border-slate-100'}`}>
+      {/* 2.1 Porcentagem de Ocupação por Pátio */}
+      <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border shadow-sm transition-colors ${isDarkMode ? 'bg-[#12141C] border-white/5' : 'bg-white border-slate-100'}`}>
         <div className="flex items-center gap-4 mb-8">
-          <div className="w-10 h-10 rounded-xl bg-orange-600 flex items-center justify-center text-white shadow-lg shadow-orange-500/20">
-            <i className="fas fa-th"></i>
+          <div className="w-10 h-10 rounded-xl bg-emerald-600 flex items-center justify-center text-white shadow-lg shadow-emerald-500/20">
+            <i className="fas fa-percent text-base"></i>
           </div>
           <div>
-            <h3 className={`text-sm font-black uppercase tracking-widest ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Densidade de Veículos (Hoje)</h3>
+            <h3 className={`text-xs sm:text-sm font-black uppercase tracking-widest ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Comparativo de Ocupação (%)</h3>
+            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-tight">Percentual de Lotação por Setor</p>
+          </div>
+        </div>
+        
+        <div className="h-[240px] sm:h-[280px] w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart layout="vertical" data={stats.yardOccupancyData} margin={{ top: 5, right: 30, left: 40, bottom: 5 }}>
+              <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke={isDarkMode ? "#ffffff05" : "#00000005"} />
+              <XAxis type="number" domain={[0, 100]} hide />
+              <YAxis 
+                dataKey="name" 
+                type="category" 
+                axisLine={false} 
+                tickLine={false} 
+                tick={{ fontSize: 9, fontWeight: 900, fill: '#64748b' }} 
+                width={100}
+              />
+              <Tooltip 
+                cursor={{ fill: isDarkMode ? '#ffffff05' : '#f8fafc' }}
+                content={({ active, payload }) => {
+                  if (active && payload && payload.length) {
+                    const data = payload[0].payload;
+                    return (
+                      <div className={`p-3 rounded-xl shadow-xl border backdrop-blur-xl ${isDarkMode ? 'bg-[#1e293b]/90 border-white/10 text-white' : 'bg-white/90 border-slate-200 text-slate-900'}`}>
+                        <p className="text-[10px] font-black uppercase mb-1">{data.name}</p>
+                        <p className={`text-sm font-black ${data.percentage >= 90 ? 'text-red-500' : data.percentage >= 60 ? 'text-amber-500' : 'text-emerald-500'}`}>
+                          {data.percentage.toFixed(1)}%
+                        </p>
+                      </div>
+                    );
+                  }
+                  return null;
+                }}
+              />
+              <Bar 
+                dataKey="percentage" 
+                radius={[0, 10, 10, 0]} 
+                barSize={24}
+              >
+                {stats.yardOccupancyData.map((entry, index) => (
+                  <Cell 
+                    key={`cell-${index}`} 
+                    fill={entry.percentage >= 90 ? '#ef4444' : entry.percentage >= 60 ? '#f59e0b' : '#10b981'} 
+                  />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* 2.2 Heatmap de Densidade */}
+      <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border shadow-sm transition-colors ${isDarkMode ? 'bg-[#12141C] border-white/5' : 'bg-white border-slate-100'}`}>
+        <div className="flex items-center gap-4 mb-8">
+          <div className="w-10 h-10 rounded-xl bg-orange-600 flex items-center justify-center text-white shadow-lg shadow-orange-500/20">
+            <i className="fas fa-th text-base"></i>
+          </div>
+          <div>
+            <h3 className={`text-xs sm:text-sm font-black uppercase tracking-widest ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Densidade de Veículos (Hoje)</h3>
             <p className="text-[10px] text-slate-500 font-bold uppercase tracking-tight">Mapa de Calor por Setor e Horário</p>
           </div>
         </div>
@@ -523,7 +638,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       </div>
 
       {/* 3. AI ADVISOR PANEL */}
-      <div className={`p-8 rounded-[2.8rem] border transition-all relative overflow-hidden ${isDarkMode ? 'bg-blue-500/5 border-blue-500/20' : 'bg-blue-50 border-blue-100'}`}>
+      <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border transition-all relative overflow-hidden ${isDarkMode ? 'bg-blue-500/5 border-blue-500/20' : 'bg-blue-50 border-blue-100'}`}>
         <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/10 rounded-bl-full animate-pulse-subtle"></div>
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-6">
           <div className="flex items-center gap-4">
@@ -556,7 +671,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       </div>
 
       {/* 3. STRATEGIC OPTIMIZATION PANEL */}
-      <div className={`p-8 rounded-[2.8rem] border transition-all relative overflow-hidden ${isDarkMode ? 'bg-purple-500/5 border-purple-500/20' : 'bg-purple-50 border-purple-100'}`}>
+      <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border transition-all relative overflow-hidden ${isDarkMode ? 'bg-purple-500/5 border-purple-500/20' : 'bg-purple-50 border-purple-100'}`}>
         <div className="absolute top-0 right-0 w-32 h-32 bg-purple-500/10 rounded-bl-full animate-pulse-subtle"></div>
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-6">
           <div className="flex items-center gap-4">
@@ -623,7 +738,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       </div>
 
       {/* 4. LAYOUT & FLOW OPTIMIZATION PANEL */}
-      <div className={`p-8 rounded-[2.8rem] border transition-all relative overflow-hidden ${isDarkMode ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-emerald-50 border-emerald-100'}`}>
+      <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border transition-all relative overflow-hidden ${isDarkMode ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-emerald-50 border-emerald-100'}`}>
         <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/10 rounded-bl-full animate-pulse-subtle"></div>
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-6">
           <div className="flex items-center gap-4">
@@ -797,7 +912,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
-        <div className={`xl:col-span-1 p-8 rounded-[2.8rem] border shadow-sm flex flex-col items-center transition-colors ${isDarkMode ? 'bg-[#12141C] border-white/5' : 'bg-white border-slate-100'}`}>
+        <div className={`xl:col-span-1 p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border shadow-sm flex flex-col items-center transition-colors ${isDarkMode ? 'bg-[#12141C] border-white/5' : 'bg-white border-slate-100'}`}>
            <h3 className={`text-[10px] font-black uppercase tracking-[0.2em] mb-8 self-start ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Distribuição de SLA</h3>
            <div className="h-[200px] w-full relative">
              <ResponsiveContainer width="100%" height="100%">
@@ -826,7 +941,7 @@ const Dashboard: React.FC<DashboardProps> = ({
            </div>
         </div>
 
-        <div className={`xl:col-span-2 p-8 rounded-[2.8rem] border shadow-sm transition-colors ${isDarkMode ? 'bg-[#12141C] border-white/5' : 'bg-white border-slate-100'}`}>
+        <div className={`xl:col-span-2 p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border shadow-sm transition-colors ${isDarkMode ? 'bg-[#12141C] border-white/5' : 'bg-white border-slate-100'}`}>
           <div className="flex justify-between items-center mb-8">
             <h3 className={`text-[10px] font-black uppercase tracking-[0.2em] ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Carga de Trabalho / Consultor</h3>
             <span className="text-[9px] font-black text-blue-500 uppercase">Ordenado por Ativos</span>
@@ -844,7 +959,7 @@ const Dashboard: React.FC<DashboardProps> = ({
           </div>
         </div>
 
-        <div className={`xl:col-span-1 p-8 rounded-[2.8rem] border shadow-sm flex flex-col justify-between transition-colors ${isDarkMode ? 'bg-[#12141C] border-white/5' : 'bg-white border-slate-100'}`}>
+        <div className={`xl:col-span-1 p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border shadow-sm flex flex-col justify-between transition-colors ${isDarkMode ? 'bg-[#12141C] border-white/5' : 'bg-white border-slate-100'}`}>
           <div>
             <h3 className={`text-[10px] font-black uppercase tracking-[0.2em] mb-6 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Vagas Livres</h3>
             <div className="p-8 rounded-[2rem] bg-blue-600 flex flex-col items-center justify-center text-white shadow-xl shadow-blue-500/30">

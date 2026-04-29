@@ -51,28 +51,28 @@ const ConsultantTaskBoard: React.FC<ConsultantTaskBoardProps> = ({
   };
 
   return (
-    <div className={`p-6 min-h-screen flex flex-col gap-8 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>
+    <div className={`p-4 sm:p-6 min-h-screen flex flex-col gap-6 sm:gap-8 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
-          <h2 className="text-3xl font-black uppercase tracking-tighter">Quadro de Tarefas por Consultor</h2>
-          <p className="text-slate-500 font-bold uppercase text-[10px] tracking-widest mt-1">Gerenciamento de Fluxo e Progressão de Entregas</p>
+          <h2 className="text-2xl sm:text-3xl font-black uppercase tracking-tighter">Quadro de Tarefas</h2>
+          <p className="text-slate-500 font-bold uppercase text-[9px] sm:text-[10px] tracking-widest mt-1">Gerenciamento de Fluxo</p>
         </div>
-        <div className="flex items-center gap-6">
+        <div className="flex items-center gap-4 sm:gap-6">
           <div className="flex flex-col items-end">
-            <span className="text-[10px] font-black uppercase text-slate-500">Total de Veículos</span>
-            <span className="text-2xl font-black">{vehicles.length}</span>
+            <span className="text-[9px] sm:text-[10px] font-black uppercase text-slate-500">Ativos</span>
+            <span className="text-xl sm:text-2xl font-black">{vehicles.length}</span>
           </div>
           <div className="w-px h-10 bg-slate-200 dark:bg-white/10"></div>
           <div className="flex flex-col items-end">
-            <span className="text-[10px] font-black uppercase text-slate-500">Eficiência Média</span>
-            <span className="text-2xl font-black text-blue-500">
+            <span className="text-[9px] sm:text-[10px] font-black uppercase text-slate-500">Eficiência</span>
+            <span className="text-xl sm:text-2xl font-black text-blue-500">
               {vehicles.length > 0 ? Math.round(vehicles.filter(v => v.washStatus === 'Veículo Pronto').length / vehicles.length * 100) : 0}%
             </span>
           </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 overflow-x-auto pb-10">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-6 overflow-x-auto pb-10">
         <AnimatePresence mode="popLayout">
           {CONSULTANTS.map((consultant, idx) => {
             const consultantVehicles = groupedVehicles[consultant] || [];
@@ -84,11 +84,11 @@ const ConsultantTaskBoard: React.FC<ConsultantTaskBoardProps> = ({
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: idx * 0.05 }}
-                className={`flex flex-col rounded-[2.5rem] border-2 shadow-sm transition-all h-[600px] ${
+                className={`flex flex-col rounded-2xl sm:rounded-3xl md:rounded-[2.5rem] border-2 shadow-sm transition-all h-[500px] sm:h-[600px] ${
                   isDarkMode ? 'bg-[#12141C] border-white/5' : 'bg-white border-slate-100'
                 }`}
               >
-                <div className="p-6 border-b border-dashed border-slate-500/10">
+                <div className="p-4 sm:p-6 border-b border-dashed border-slate-500/10">
                   <div className="flex justify-between items-center mb-4">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-lg shadow-blue-500/20 font-black text-xs uppercase">

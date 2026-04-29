@@ -199,20 +199,21 @@ export const extractLicensePlate = async (base64Image: string) => {
             Você é um especialista em OCR de alta precisão para logística automotiva global.
             Analise a imagem do veículo e extraia a PLACA (License Plate).
             
-            FORMATOS SUPORTADOS:
-            1. Padrão Mercosul (Brasil/Argentina/etc): Ex: ABC1D23, AB123CD
-            2. Padrão Brasileiro Antigo: Ex: ABC-1234
-            3. Padrão Europeu (UE): Ex: B-1234-AB, 1-ABC-123, AB 123 CD
-            4. Padrão Americano (EUA/Canadá): Ex: 1ABC234, ABC-1234
-            5. Outros Formatos Internacionais: Extraia qualquer sequência alfanumérica que identifique o veículo.
+            FORMATOS PRIORITÁRIOS (BRASIL/MERCOSUL):
+            1. Mercosul Brasil: ABC1D23 (3 letras, 1 número, 1 letra, 2 números)
+            2. Mercosul Argentina: AB123CD (2 letras, 3 números, 2 letras)
+            3. Brasileiro Antigo: ABC-1234 (3 letras, 4 números)
+            4. Outros Mercosul (Uruguai, Paraguai): Ex: ABC 1234, ABC 123
             
-            INSTRUÇÕES CRÍTICAS:
-            - Retorne APENAS o código da placa.
-            - Remova espaços, pontos ou caracteres especiais desnecessários (mantenha hífens se fizerem parte do padrão).
-            - Se a imagem estiver borrada ou a placa não for visível, retorne exatamente: NOT_FOUND
-            - Priorize a leitura da placa principal do veículo.
-            - Diferencie corretamente '0' (zero) de 'O' (letra O) baseado no contexto do padrão da placa.
-            - Se houver mais de uma placa visível, use a que parece ser a oficial do veículo.
+            DIRETRIZES DE EXTRAÇÃO:
+            - Extraia a sequência alfanumérica da placa.
+            - Para placas o Padrão Brasileiro Antigo (ABC-1234), MANTENHA o hífen para distinção.
+            - Para placas Mercosul, retorne apenas os 7 caracteres alfanuméricos.
+            - MUITO IMPORTANTE: No padrão Mercosul Brasil (ABC1D23), o 5º caractere é SEMPRE uma letra.
+            - No padrão Brasileiro Antigo (ABC-1234), os últimos 4 caracteres são SEMPRE números.
+            - Se a placa tiver uma tarja azul no topo com "BRASIL" ou "MERCOSUL", ignore esses nomes.
+            - Remova espaços e pontos.
+            - Retorne exatamente NOT_FOUND se nada for visível.
           ` }
         ]
       },
