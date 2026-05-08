@@ -1,26 +1,29 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { motion, Reorder, AnimatePresence } from 'motion/react';
+import { motion, Reorder, AnimatePresence, useDragControls } from 'motion/react';
 import YardView from './components/YardView';
 import VehicleForm from './components/VehicleForm';
 import Dashboard from './components/Dashboard';
 import VehicleHistory from './components/VehicleHistory';
+import OperationsOverview from './components/OperationsOverview';
 import PrismaScanner from './components/PrismaScanner';
 import OptimizationSuggestions from './components/OptimizationSuggestions';
 import Auth from './components/Auth';
 import ConsultantTaskBoard from './components/ConsultantTaskBoard';
 import IdleHistory from './components/IdleHistory';
+import CriticalCasesReport from './components/CriticalCasesReport';
+import KeyBoard from './components/KeyBoard';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { Vehicle, ActivityLog, User } from './types';
 // Removed parseISO as it was causing an export error
 import { differenceInHours } from 'date-fns';
-import { MAX_SLOTS, MAX_SLOTS_FACTORY, MAX_SLOTS_1ST_FLOOR, MAX_SLOTS_1ST_FACTORY, MAX_SLOTS_P1, MAX_SLOTS_P2, MAX_SLOTS_P6, MAX_SLOTS_COBERTURA, YARD_LAYOUT, YARD_LAYOUT_FACTORY, YARD_LAYOUT_1ST_FLOOR, YARD_LAYOUT_1ST_FACTORY, YARD_LAYOUT_P1, YARD_LAYOUT_P2, YARD_LAYOUT_P6, YARD_LAYOUT_COBERTURA, ALERT_THRESHOLDS, CONSULTANTS } from './constants';
+import { MAX_SLOTS, MAX_SLOTS_FACTORY, MAX_SLOTS_1ST_FLOOR, MAX_SLOTS_1ST_FACTORY, MAX_SLOTS_P1, MAX_SLOTS_P2, MAX_SLOTS_P6, MAX_SLOTS_COBERTURA, YARD_LAYOUT, YARD_LAYOUT_FACTORY, YARD_LAYOUT_1ST_FLOOR, YARD_LAYOUT_1ST_FACTORY, YARD_LAYOUT_P1, YARD_LAYOUT_P2, YARD_LAYOUT_P6, YARD_LAYOUT_COBERTURA, ALERT_THRESHOLDS, CONSULTANTS, DEFAULT_YARD_OPTIONS } from './constants';
 import { supabase } from './services/supabase';
 import { databaseService } from './services/database';
 
 type ThemeMode = 'auto' | 'light' | 'dark';
-type YardTab = 'yard' | 'yard2' | 'yard3' | 'yard4' | 'yardP1' | 'yardP2' | 'yardP6' | 'yardCob' | 'dashboard' | 'tasks' | 'idleHistory';
+type YardTab = 'yard' | 'yard2' | 'yard3' | 'yard4' | 'yardP1' | 'yardP2' | 'yardP6' | 'yardCob' | 'dashboard' | 'tasks' | 'idleHistory' | 'overview' | 'keyBoard' | 'criticalReport';
 
 interface Toast {
   id: string;
@@ -28,6 +31,50 @@ interface Toast {
   message: string;
   type: 'info' | 'warning' | 'error' | 'success';
 }
+
+interface DraggableYardItemProps {
+  option: { id: string; label: string; icon: string };
+  activeTab: YardTab;
+  setActiveTab: (tab: YardTab) => void;
+}
+
+const DraggableYardItem: React.FC<DraggableYardItemProps> = ({ option, activeTab, setActiveTab }) => {
+  const controls = useDragControls();
+
+  return (
+    <Reorder.Item 
+      value={option}
+      id={option.id}
+      dragListener={false}
+      dragControls={controls}
+      className="relative list-none"
+    >
+      <button 
+        id={`tab-${option.id}`}
+        onClick={() => setActiveTab(option.id as YardTab)}
+        className={`w-full flex items-center gap-4 px-5 py-4 rounded-2xl transition-all relative group shadow-sm ${
+          activeTab === option.id 
+            ? 'bg-blue-600 text-white font-black shadow-lg shadow-blue-900/40 z-10' 
+            : 'bg-white/5 border border-white/5 text-slate-300 hover:bg-white/10 font-bold hover:text-white'
+        }`}
+      >
+        <i className={`fas ${option.icon} text-lg w-6 shrink-0 ${activeTab === option.id ? 'text-white' : 'text-slate-500'}`}></i> 
+        <span className="truncate text-xs font-black uppercase tracking-widest">{option.label}</span>
+        
+        <div 
+          onPointerDown={(e) => controls.start(e)}
+          className={`ml-auto cursor-grab active:cursor-grabbing p-1.5 rounded-lg transition-all ${
+            activeTab === option.id 
+              ? 'text-white/40 hover:text-white hover:bg-white/10' 
+              : 'text-slate-600 hover:text-slate-400 hover:bg-white/5 opacity-0 group-hover:opacity-100'
+          }`}
+        >
+          <i className="fas fa-grip-vertical text-xs"></i>
+        </div>
+      </button>
+    </Reorder.Item>
+  );
+};
 
 const App: React.FC = () => {
   const parseVehicles = (saved: string | null): Vehicle[] => {
@@ -125,6 +172,7 @@ const App: React.FC = () => {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isPrismaScannerOpen, setIsPrismaScannerOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<YardTab>('yard');
+  const [initialService, setInitialService] = useState<string | undefined>(undefined);
   const [historyVehicleId, setHistoryVehicleId] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
@@ -134,6 +182,7 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(true);
 
   const [isResettingPassword, setIsResettingPassword] = useState(false);
+  const [showUserManagement, setShowUserManagement] = useState(false);
 
   // Auth Effect
   useEffect(() => {
@@ -269,32 +318,17 @@ const App: React.FC = () => {
     }
   }, [currentUser]);
 
-  const DEFAULT_YARD_OPTIONS = useMemo(() => [
-    { id: 'dashboard', label: 'Visão Geral', icon: 'fa-chart-pie' },
-    { id: 'yard', label: 'Sub Solo Matriz', icon: 'fa-th-large' },
-    { id: 'yard2', label: 'Sub Solo Factory', icon: 'fa-th-large' },
-    { id: 'yard3', label: 'Pátio 3', icon: 'fa-warehouse' },
-    { id: 'yard4', label: '3° Piso Factory', icon: 'fa-th-large' },
-    { id: 'yardP1', label: 'Pátio P1', icon: 'fa-th-large' },
-    { id: 'yardP2', label: 'Pátio P2', icon: 'fa-th-large' },
-    { id: 'yardP6', label: 'Pátio P6', icon: 'fa-th-large' },
-    { id: 'yardCob', label: 'Cobertura Oficina', icon: 'fa-warehouse' },
-    { id: 'tasks', label: 'Tarefas', icon: 'fa-tasks' },
-    { id: 'idleHistory', label: 'Histórico Ociosidade', icon: 'fa-user-clock' },
-  ], []);
+  // Removed duplicated DEFAULT_YARD_OPTIONS as it's now in constants.ts
 
   const [yardOptions, setYardOptions] = useState(() => {
     const saved = localStorage.getItem('yard_options_order');
     if (saved) {
       try {
-        const parsed = JSON.parse(saved) as (string | {id: string})[];
-        // Map saved IDs back to full objects
-        const existingOptions = parsed.map((savedOpt) => {
-          const id = typeof savedOpt === 'string' ? savedOpt : savedOpt.id;
+        const parsed = JSON.parse(saved) as string[];
+        const existingOptions = parsed.map((id) => {
           return DEFAULT_YARD_OPTIONS.find(def => def.id === id);
         }).filter((o): o is typeof DEFAULT_YARD_OPTIONS[0] => !!o);
 
-        // Find any new options in DEFAULT_YARD_OPTIONS that are not in existingOptions
         const newOptions = DEFAULT_YARD_OPTIONS.filter(
           def => !existingOptions.some(eo => eo.id === def.id)
         );
@@ -325,12 +359,7 @@ const App: React.FC = () => {
 
   // Notificações State
   const [notifiedVehicleIds, setNotifiedVehicleIds] = useState<Set<string>>(new Set());
-  const [notifiedEmptySlots, setNotifiedEmptySlots] = useState<Set<string>>(new Set());
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [slotEmptySince, setSlotEmptySince] = useState<Record<string, Record<number, string>>>(() => {
-    const saved = localStorage.getItem('yard_slot_empty_since');
-    return saved ? JSON.parse(saved) : {};
-  });
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
     typeof Notification !== 'undefined' ? Notification.permission : 'default'
   );
@@ -372,10 +401,6 @@ const App: React.FC = () => {
     localStorage.setItem('yard_activity_logs_p6', JSON.stringify(logsP6));
     localStorage.setItem('yard_activity_logs_cob', JSON.stringify(logsCob));
   }, [logs, logs2, logs3, logs4, logsP1, logsP2, logsP6, logsCob]);
-
-  useEffect(() => {
-    localStorage.setItem('yard_slot_empty_since', JSON.stringify(slotEmptySince));
-  }, [slotEmptySince]);
 
   const removeToast = useCallback((id: string) => {
     setToasts(prev => prev.filter(t => t.id !== id));
@@ -436,55 +461,6 @@ const App: React.FC = () => {
     vehicles, vehicles2, vehicles3, vehicles4, vehiclesP1, vehiclesP2, vehiclesP6, vehiclesCob,
     notificationPermission, notifiedVehicleIds, now, addToast
   ]);
-
-  // Monitoramento de Vagas Ociosas (> 48h)
-  useEffect(() => {
-    const checkIdleSlots = () => {
-      const yards = [
-        { id: 'yard', vehicles: vehicles, max: MAX_SLOTS },
-        { id: 'yard2', vehicles: vehicles2, max: MAX_SLOTS_FACTORY },
-        { id: 'yard3', vehicles: vehicles3, max: MAX_SLOTS_1ST_FLOOR },
-        { id: 'yard4', vehicles: vehicles4, max: MAX_SLOTS_1ST_FACTORY },
-        { id: 'yardP1', vehicles: vehiclesP1, max: MAX_SLOTS_P1 },
-        { id: 'yardP2', vehicles: vehiclesP2, max: MAX_SLOTS_P2 },
-        { id: 'yardP6', vehicles: vehiclesP6, max: MAX_SLOTS_P6 },
-        { id: 'yardCob', vehicles: vehiclesCob, max: MAX_SLOTS_COBERTURA }
-      ];
-
-      yards.forEach(yard => {
-        const emptySinceMap = slotEmptySince[yard.id] || {};
-        for (let i = 0; i < yard.max; i++) {
-          const isOccupied = yard.vehicles.some(v => v.slotIndex === i);
-          if (!isOccupied && emptySinceMap[i]) {
-            const emptyTime = new Date(emptySinceMap[i]);
-            const hoursEmpty = differenceInHours(now, emptyTime);
-            const notificationKey = `${yard.id}-${i}`;
-
-            if (hoursEmpty >= 48 && !notifiedEmptySlots.has(notificationKey)) {
-              addToast({
-                id: notificationKey,
-                title: 'Vaga Ociosa Detectada',
-                message: `A vaga ${i + 1} no ${yardOptions.find(y => y.id === yard.id)?.label} está livre há mais de ${hoursEmpty} horas.`,
-                type: 'warning'
-              });
-              
-              if (notificationPermission === 'granted') {
-                new Notification('Atenção: Vaga Ociosa', {
-                  body: `A vaga ${i + 1} no ${yardOptions.find(y => y.id === yard.id)?.label} está livre há ${hoursEmpty}h.`,
-                  icon: 'https://cdn-icons-png.flaticon.com/512/1165/1165936.png',
-                  tag: `idle-${notificationKey}`
-                });
-              }
-
-              setNotifiedEmptySlots(prev => new Set(prev).add(notificationKey));
-            }
-          }
-        }
-      });
-    };
-
-    checkIdleSlots();
-  }, [now, vehicles, vehicles2, vehicles3, vehicles4, vehiclesP1, vehiclesP2, vehiclesP6, vehiclesCob, slotEmptySince, notifiedEmptySlots, notificationPermission, yardOptions, addToast]);
 
   const requestNotificationPermission = async () => {
     if (typeof Notification === 'undefined') return;
@@ -663,7 +639,10 @@ const App: React.FC = () => {
     let foundYardId: string | null = null;
 
     for (const yard of allYards) {
-      const v = yard.vehicles.find(v => v.prisma.number === data.number);
+      const v = yard.vehicles.find(v => 
+        v.prisma.number === data.number && 
+        v.prisma.color.toLowerCase() === data.color.toLowerCase()
+      );
       if (v) {
         foundVehicle = v;
         foundYardId = yard.id;
@@ -672,32 +651,42 @@ const App: React.FC = () => {
     }
 
     if (foundVehicle && foundYardId) {
-      setActiveTab(foundYardId as 'yard' | 'yard2' | 'yard3' | 'yard4' | 'yardP1' | 'yardP2' | 'yardP6' | 'dashboard');
+      setActiveTab(foundYardId as YardTab);
       setSelectedSlot(foundVehicle.slotIndex);
       setIsFormOpen(true);
       setIsPrismaScannerOpen(false);
+      addToast({
+        title: 'Prisma Localizado',
+        message: `O Prisma #${data.number} já está em uso na vaga ${foundVehicle.slotIndex + 1} (${DEFAULT_YARD_OPTIONS.find(o => o.id === foundYardId)?.label}).`,
+        type: 'info'
+      });
     } else {
-      const confirmNew = window.confirm(`Prisma #${data.number} não encontrado. Deseja registrar um novo veículo/equipamento com este Prisma?`);
-      if (confirmNew) {
-        // Find first empty slot in current yard
-        const currentMaxSlots = activeTab === 'yardP6' ? MAX_SLOTS_P6 : (activeTab === 'yardP2' ? MAX_SLOTS_P2 : (activeTab === 'yardP1' ? MAX_SLOTS_P1 : (activeTab === 'yard4' ? MAX_SLOTS_1ST_FACTORY : (activeTab === 'yard3' ? MAX_SLOTS_1ST_FLOOR : (activeTab === 'yard2' ? MAX_SLOTS_FACTORY : MAX_SLOTS)))));
-        let firstEmpty = -1;
-        for (let i = 0; i < currentMaxSlots; i++) {
-          if (!currentVehicles.find(v => v.slotIndex === i)) {
-            firstEmpty = i;
-            break;
-          }
+      // Find first empty slot in current yard
+      const currentMaxSlots = activeTab === 'yardCob' ? MAX_SLOTS_COBERTURA : (activeTab === 'yardP6' ? MAX_SLOTS_P6 : (activeTab === 'yardP2' ? MAX_SLOTS_P2 : (activeTab === 'yardP1' ? MAX_SLOTS_P1 : (activeTab === 'yard4' ? MAX_SLOTS_1ST_FACTORY : (activeTab === 'yard3' ? MAX_SLOTS_1ST_FLOOR : (activeTab === 'yard2' ? MAX_SLOTS_FACTORY : MAX_SLOTS))))));
+      let firstEmpty = -1;
+      for (let i = 0; i < currentMaxSlots; i++) {
+        if (!currentVehicles.find(v => v.slotIndex === i)) {
+          firstEmpty = i;
+          break;
         }
+      }
 
-        if (firstEmpty !== -1) {
-          setSelectedSlot(firstEmpty);
-          setIsFormOpen(true);
-          setIsPrismaScannerOpen(false);
-          // Note: We can't easily pre-fill the form from here without changing VehicleForm props or using a more complex state
-          // But opening the form is a good start.
-        } else {
-          alert("Não há vagas disponíveis neste pátio para registrar um novo veículo.");
-        }
+      if (firstEmpty !== -1) {
+        setInitialService(undefined);
+        setSelectedSlot(firstEmpty);
+        setIsFormOpen(true);
+        setIsPrismaScannerOpen(false);
+        addToast({
+          title: 'Novo Registro',
+          message: `Prisma #${data.number} pronto para novo registro no ${currentYardLabel}.`,
+          type: 'success'
+        });
+      } else {
+        addToast({
+          title: 'Pátio Lotado',
+          message: `Não há vagas no ${currentYardLabel}. Selecione outro pátio ou libere uma vaga.`,
+          type: 'error'
+        });
       }
     }
   };
@@ -809,7 +798,8 @@ const App: React.FC = () => {
       timestamp: nowISO,
       details: logDetails,
       yardId: targetYardId,
-      yardName: getYardName(targetYardId)
+      yardName: getYardName(targetYardId),
+      serviceType: vehicle.service
     };
 
     databaseService.saveLog(newLog, targetYardId).catch(console.error);
@@ -831,23 +821,6 @@ const App: React.FC = () => {
           return prev.map(v => v.id === vehicle.id ? vehicle : v);
         }
         return [...prev, vehicle];
-      });
-
-      // Clear empty slots tracking for target slot
-      setSlotEmptySince(prev => {
-        const next = { ...prev };
-        if (next[targetYardId]) {
-          const newYardMap = { ...next[targetYardId] };
-          delete newYardMap[vehicle.slotIndex];
-          next[targetYardId] = newYardMap;
-        }
-        return next;
-      });
-      
-      setNotifiedEmptySlots(prev => {
-        const next = new Set(prev);
-        next.delete(`${targetYardId}-${vehicle.slotIndex}`);
-        return next;
       });
     }
 
@@ -908,6 +881,7 @@ const App: React.FC = () => {
       duration: `${differenceInHours(exitDate, new Date(vehicle.entryTime))}h`,
       yardId: targetYardId,
       yardName: getYardName(targetYardId),
+      serviceType: vehicle.service,
       idleReason: idleReason,
       idleActions: idleActions
     };
@@ -928,15 +902,6 @@ const App: React.FC = () => {
     setNotifiedVehicleIds(prev => {
       const next = new Set(prev);
       next.delete(id);
-      return next;
-    });
-    
-    setSlotEmptySince(prev => {
-      const next = { ...prev };
-      next[targetYardId] = {
-        ...(next[targetYardId] || {}),
-        [vehicle.slotIndex]: exitTime
-      };
       return next;
     });
 
@@ -969,10 +934,149 @@ const App: React.FC = () => {
     }
   };
 
+  const handleAddHistoryNote = async (note: string) => {
+    if (!historyVehicleId) return;
+    
+    // Find vehicle in all active vehicles
+    const vehicle = allActiveVehicles.find(v => v.id === historyVehicleId);
+    if (!vehicle) {
+       addToast('Veículo não encontrado para adicionar nota', 'error');
+       return;
+    }
+
+    const newLog: Omit<ActivityLog, 'id'> = {
+      vehicleId: historyVehicleId,
+      vehiclePlate: vehicle.plate,
+      vehicleModel: vehicle.model,
+      action: 'note',
+      timestamp: new Date().toISOString(),
+      details: note,
+      yardId: vehicle.yardId,
+      yardName: yardOptions.find(y => y.id === vehicle.yardId)?.label || 'Pátio'
+    };
+
+    try {
+      const { data, error } = await supabase
+        .from('activity_logs')
+        .insert([newLog])
+        .select();
+
+      if (error) throw error;
+      
+      const logWithId = data[0] as ActivityLog;
+      
+      // Update the correct logs state based on yardId
+      const setterMap: Record<string, React.Dispatch<React.SetStateAction<ActivityLog[]>>> = {
+        'yard': setLogs,
+        'yard2': setLogs2,
+        'yard3': setLogs3,
+        'yard4': setLogs4,
+        'yardP1': setLogsP1,
+        'yardP2': setLogsP2,
+        'yardP6': setLogsP6,
+        'yardCob': setLogsCob
+      };
+
+      const setter = setterMap[vehicle.yardId];
+      if (setter) {
+        setter(prev => [logWithId, ...prev]);
+      }
+      
+      addToast('Anotação adicionada com sucesso', 'success');
+    } catch (err) {
+      console.error('Error adding note:', err);
+      addToast('Erro ao salvar anotação', 'error');
+    }
+  };
+
   const handleLogin = (user: User) => {
     setCurrentUser(user);
     addToast({ title: 'Bem-vindo', message: `Olá, ${user.name}! Acesso liberado ao YardLogic Pro.`, type: 'success' });
   };
+
+  const findFirstAvailableSlot = useCallback(() => {
+    const yards = [
+      { id: 'yard' as YardTab, vehicles: vehicles, max: MAX_SLOTS },
+      { id: 'yard2' as YardTab, vehicles: vehicles2, max: MAX_SLOTS_FACTORY },
+      { id: 'yard3' as YardTab, vehicles: vehicles3, max: MAX_SLOTS_1ST_FLOOR },
+      { id: 'yard4' as YardTab, vehicles: vehicles4, max: MAX_SLOTS_1ST_FACTORY },
+      { id: 'yardP1' as YardTab, vehicles: vehiclesP1, max: MAX_SLOTS_P1 },
+      { id: 'yardP2' as YardTab, vehicles: vehiclesP2, max: MAX_SLOTS_P2 },
+      { id: 'yardP6' as YardTab, vehicles: vehiclesP6, max: MAX_SLOTS_P6 },
+      { id: 'yardCob' as YardTab, vehicles: vehiclesCob, max: MAX_SLOTS_COBERTURA },
+    ];
+
+    for (const yard of yards) {
+      for (let i = 0; i < yard.max; i++) {
+        if (!yard.vehicles.some(v => v.slotIndex === i)) {
+          return { yardId: yard.id, slotIndex: i };
+        }
+      }
+    }
+    return null;
+  }, [vehicles, vehicles2, vehicles3, vehicles4, vehiclesP1, vehiclesP2, vehiclesP6, vehiclesCob]);
+
+  const findFirstAvailableInYard = useCallback((yardId: YardTab) => {
+    const yardConfig = [
+      { id: 'yard' as YardTab, vehicles: vehicles, max: MAX_SLOTS },
+      { id: 'yard2' as YardTab, vehicles: vehicles2, max: MAX_SLOTS_FACTORY },
+      { id: 'yard3' as YardTab, vehicles: vehicles3, max: MAX_SLOTS_1ST_FLOOR },
+      { id: 'yard4' as YardTab, vehicles: vehicles4, max: MAX_SLOTS_1ST_FACTORY },
+      { id: 'yardP1' as YardTab, vehicles: vehiclesP1, max: MAX_SLOTS_P1 },
+      { id: 'yardP2' as YardTab, vehicles: vehiclesP2, max: MAX_SLOTS_P2 },
+      { id: 'yardP6' as YardTab, vehicles: vehiclesP6, max: MAX_SLOTS_P6 },
+      { id: 'yardCob' as YardTab, vehicles: vehiclesCob, max: MAX_SLOTS_COBERTURA },
+    ].find(y => y.id === yardId);
+
+    if (!yardConfig) return null;
+
+    for (let i = 0; i < yardConfig.max; i++) {
+      if (!yardConfig.vehicles.some(v => v.slotIndex === i)) {
+        return i;
+      }
+    }
+    return null;
+  }, [vehicles, vehicles2, vehicles3, vehicles4, vehiclesP1, vehiclesP2, vehiclesP6, vehiclesCob]);
+
+  const handleMoveToYard = (vehicleId: string, targetYardId: string) => {
+    const vehicle = allActiveVehicles.find(v => v.id === vehicleId);
+    if (!vehicle) return;
+
+    if (vehicle.yardId === targetYardId) return;
+
+    const availableSlot = findFirstAvailableInYard(targetYardId as YardTab);
+    
+    if (availableSlot !== null) {
+      const updatedVehicle = { ...vehicle, yardId: targetYardId, slotIndex: availableSlot };
+      handleSaveVehicle(updatedVehicle);
+      
+      addToast({
+        title: 'Transferência de Pátio',
+        message: `Veículo ${vehicle.plate} movido para ${DEFAULT_YARD_OPTIONS.find(o => o.id === targetYardId)?.label}.`,
+        type: 'success'
+      });
+      
+      // Mudar para o pátio destino para visualização
+      setActiveTab(targetYardId as YardTab);
+    } else {
+      addToast({
+        title: 'Pátio Destino Lotado',
+        message: `Não há vagas disponíveis no ${DEFAULT_YARD_OPTIONS.find(o => o.id === targetYardId)?.label}.`,
+        type: 'error'
+      });
+    }
+  };
+
+  const yardLayouts = useMemo(() => ({
+    yard: YARD_LAYOUT,
+    yard2: YARD_LAYOUT_FACTORY,
+    yard3: YARD_LAYOUT_1ST_FLOOR,
+    yard4: YARD_LAYOUT_1ST_FACTORY,
+    yardP1: YARD_LAYOUT_P1,
+    yardP2: YARD_LAYOUT_P2,
+    yardP6: YARD_LAYOUT_P6,
+    yardCob: YARD_LAYOUT_COBERTURA
+  }), []);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -1087,12 +1191,14 @@ const App: React.FC = () => {
           <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
         </div>
       ) : (
-        (!currentUser || isResettingPassword) && (
+        (!currentUser || isResettingPassword || showUserManagement) && (
           <Auth 
             onLogin={handleLogin} 
             isDarkMode={isDarkMode} 
             isResettingPassword={isResettingPassword}
             onResetComplete={() => setIsResettingPassword(false)}
+            showAdminManagement={showUserManagement}
+            onCloseAdminManagement={() => setShowUserManagement(false)}
           />
         )
       )}
@@ -1152,22 +1258,12 @@ const App: React.FC = () => {
         <div className="flex flex-col gap-8">
           <Reorder.Group axis="y" values={yardOptions} onReorder={setYardOptions} className="flex flex-col gap-2">
             {yardOptions.map((option) => (
-              <Reorder.Item 
+              <DraggableYardItem 
                 key={option.id} 
-                value={option}
-                className="relative"
-              >
-                <button 
-                  onClick={() => setActiveTab(option.id as YardTab)}
-                  className={`w-full flex items-center gap-4 px-5 py-4 rounded-2xl transition-all relative group ${activeTab === option.id ? 'bg-blue-600 text-white font-black shadow-lg shadow-blue-900/40' : 'hover:bg-white/5 font-bold'}`}
-                >
-                  <i className={`fas ${option.icon} text-lg w-6 shrink-0`}></i> 
-                  <span className="truncate">{option.label}</span>
-                  <div className="ml-auto opacity-0 group-hover:opacity-40 transition-opacity cursor-grab active:cursor-grabbing p-1">
-                    <i className="fas fa-grip-vertical text-[10px]"></i>
-                  </div>
-                </button>
-              </Reorder.Item>
+                option={option} 
+                activeTab={activeTab} 
+                setActiveTab={setActiveTab}
+              />
             ))}
           </Reorder.Group>
 
@@ -1211,7 +1307,7 @@ const App: React.FC = () => {
           </div>
       </aside>
 
-      <main className="flex-1 p-3 sm:p-6 md:p-10 overflow-x-hidden overflow-y-auto flex flex-col gap-4 sm:gap-8 min-w-0">
+      <main className="flex-1 p-3 sm:p-6 md:p-10 overflow-x-hidden overflow-y-auto flex flex-col gap-4 sm:gap-8 min-w-0 print:overflow-visible print:h-auto print:p-0">
         <header className="no-print flex flex-col xl:flex-row xl:items-center justify-between gap-6 sm:gap-8 shrink-0">
           <div className="relative">
             <div className="absolute -left-4 top-0 bottom-0 w-1 bg-blue-600 rounded-full opacity-50"></div>
@@ -1294,6 +1390,7 @@ const App: React.FC = () => {
 
             <OptimizationSuggestions 
               vehicles={allActiveVehicles}
+              activityLogs={allLogs}
               isDarkMode={isDarkMode}
             />
 
@@ -1327,7 +1424,17 @@ const App: React.FC = () => {
                   {currentUser?.name.charAt(0)}
                 </div>
                 <div className="flex flex-col">
-                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Usuário</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Usuário</span>
+                    {currentUser?.role === 'admin' && (
+                      <button 
+                        onClick={() => setShowUserManagement(true)}
+                        className="text-[8px] font-black bg-blue-600 text-white px-2 py-0.5 rounded-md uppercase tracking-widest hover:bg-blue-500 transition-colors"
+                      >
+                        Config. Cargo
+                      </button>
+                    )}
+                  </div>
                   <span className={`text-[11px] font-black uppercase mt-1 tracking-tighter ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{currentUser?.name}</span>
                 </div>
               </div>
@@ -1343,16 +1450,17 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        <div className={`flex-1 min-h-0 rounded-[1.5rem] sm:rounded-[2.5rem] md:rounded-[3.5rem] shadow-2xl border transition-all duration-1000 overflow-hidden ${isDarkMode ? 'bg-[#0A0B10] border-white/5' : 'bg-white border-slate-200'}`}>
+        <div className={`flex-1 min-h-0 rounded-[1.5rem] sm:rounded-[2.5rem] md:rounded-[3.5rem] shadow-2xl border transition-all duration-1000 overflow-hidden print:overflow-visible print:h-auto print:border-none print:shadow-none ${isDarkMode ? 'bg-[#0A0B10] border-white/5' : 'bg-white border-slate-200'}`}>
           {activeTab === 'yard' || activeTab === 'yard2' || activeTab === 'yard3' || activeTab === 'yard4' || activeTab === 'yardP1' || activeTab === 'yardP2' || activeTab === 'yardP6' || activeTab === 'yardCob' ? (
             <YardView 
               vehicles={currentVehicles} 
               activityLogs={currentLogs}
-              onSelectSlot={(idx) => { setSelectedSlot(idx); setIsFormOpen(true); }}
+              onSelectSlot={(idx) => { setInitialService(undefined); setSelectedSlot(idx); setIsFormOpen(true); }}
               onViewHistory={setHistoryVehicleId}
               onUpdateVehicle={handleSaveVehicle}
               onUpdateLog={handleUpdateLog}
               onRemoveVehicle={handleRemoveVehicle}
+              onMoveToYard={handleMoveToYard}
               isDarkMode={isDarkMode}
               selectedSlotIndex={selectedSlot}
               now={now}
@@ -1371,6 +1479,44 @@ const App: React.FC = () => {
             <IdleHistory 
               allLogs={allLogs}
               onUpdateLog={handleUpdateLog}
+              isDarkMode={isDarkMode}
+            />
+          ) : activeTab === 'keyBoard' ? (
+            <KeyBoard 
+              vehicles={allActiveVehicles}
+              yardOptions={yardOptions}
+              yardLayouts={yardLayouts}
+              isDarkMode={isDarkMode}
+            />
+          ) : activeTab === 'overview' ? (
+            <OperationsOverview 
+              vehicles={allActiveVehicles}
+              activityLogs={allLogs}
+              isDarkMode={isDarkMode}
+              onEntryClick={(predefinedService) => {
+                const available = findFirstAvailableSlot();
+                if (available) {
+                  setInitialService(predefinedService);
+                  setActiveTab(available.yardId);
+                  setSelectedSlot(available.slotIndex);
+                  setIsFormOpen(true);
+                } else {
+                  addToast({
+                    title: 'Pátio Lotado',
+                    message: 'Não há vagas disponíveis em nenhum dos pátios cadastrados.',
+                    type: 'error'
+                  });
+                }
+              }}
+              onExitClick={(v) => {
+                setInitialService(undefined);
+                setActiveTab(v.yardId as YardTab);
+                setSelectedSlot(v.slotIndex);
+                setIsFormOpen(true);
+              }}
+            />
+          ) : activeTab === 'criticalReport' ? (
+            <CriticalCasesReport
               isDarkMode={isDarkMode}
             />
           ) : (
@@ -1401,12 +1547,14 @@ const App: React.FC = () => {
         {isFormOpen && selectedSlot !== null && (
           <VehicleForm
             slotIndex={selectedSlot}
+            initialService={initialService}
             existingVehicle={currentVehicles.find(v => v.slotIndex === selectedSlot)}
-            allActiveVehicles={currentVehicles}
+            allActiveVehicles={allActiveVehicles}
             onSave={handleSaveVehicle}
             onRemove={handleRemoveVehicle}
-            onClose={() => { setIsFormOpen(false); setSelectedSlot(null); }}
+            onClose={() => { setIsFormOpen(false); setSelectedSlot(null); setInitialService(undefined); }}
             isDarkMode={isDarkMode}
+            addToast={addToast}
           />
         )}
       </AnimatePresence>
@@ -1414,9 +1562,10 @@ const App: React.FC = () => {
       {historyVehicleId && (
         <VehicleHistory
           vehicleId={historyVehicleId}
-          vehicleModel={currentVehicles.find(v => v.id === historyVehicleId)?.model || "Veículo"}
-          logs={currentLogs}
+          vehicleModel={allActiveVehicles.find(v => v.id === historyVehicleId)?.model || "Veículo"}
+          logs={allLogs}
           onClose={() => setHistoryVehicleId(null)}
+          onAddNote={handleAddHistoryNote}
           isDarkMode={isDarkMode}
         />
       )}

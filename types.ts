@@ -44,7 +44,7 @@ export interface ActivityLog {
   vehicleModel: string;
   prismaNumber?: number;
   prismaColor?: string;
-  action: 'entry' | 'exit' | 'status_change' | 'consultant_change';
+  action: 'entry' | 'exit' | 'status_change' | 'consultant_change' | 'note';
   timestamp: string;
   details: string;
   duration?: string; // Tempo formatado (ex: "4h 30m")
@@ -52,6 +52,7 @@ export interface ActivityLog {
   idleActions?: string; // Ações tomadas (preenchido manualmente)
   yardId?: string;
   yardName?: string;
+  serviceType?: string;
 }
 
 export interface IdleLog {
@@ -84,6 +85,8 @@ export interface Vehicle {
   yardId: string;
 }
 
+export type UserRole = 'admin' | 'consultant' | 'operator' | 'manager';
+
 export interface User {
   id: string;
   name: string;
@@ -91,6 +94,9 @@ export interface User {
   password?: string; // In a real app, this would be hashed
   recoveryEmail: string;
   fingerprintEnabled: boolean;
+  role?: UserRole;
+  position?: string; // Cargo
+  permissions?: string[];
   createdAt: string;
 }
 

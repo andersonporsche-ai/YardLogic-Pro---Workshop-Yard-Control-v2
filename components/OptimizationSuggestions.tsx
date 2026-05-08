@@ -1,15 +1,16 @@
 import React, { useState } from 'react';
 import { generateOptimizationSuggestions } from '../services/aiService';
-import { Vehicle } from '../types';
+import { Vehicle, ActivityLog } from '../types';
 import Markdown from 'react-markdown';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface OptimizationSuggestionsProps {
   vehicles: Vehicle[];
+  activityLogs: ActivityLog[];
   isDarkMode: boolean;
 }
 
-const OptimizationSuggestions: React.FC<OptimizationSuggestionsProps> = ({ vehicles, isDarkMode }) => {
+const OptimizationSuggestions: React.FC<OptimizationSuggestionsProps> = ({ vehicles, activityLogs, isDarkMode }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [suggestions, setSuggestions] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -17,7 +18,7 @@ const OptimizationSuggestions: React.FC<OptimizationSuggestionsProps> = ({ vehic
   const handleGenerate = async () => {
     setIsLoading(true);
     setIsOpen(true);
-    const result = await generateOptimizationSuggestions(vehicles);
+    const result = await generateOptimizationSuggestions(vehicles, activityLogs);
     setSuggestions(result);
     setIsLoading(false);
   };

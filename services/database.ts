@@ -20,6 +20,12 @@ export const databaseService = {
     return (data || []).map(this.mapVehicleFromDb);
   },
 
+  async getAllVehicles() {
+    const { data, error } = await supabase.from('vehicles').select('*');
+    if (error) throw error;
+    return (data || []).map(this.mapVehicleFromDb);
+  },
+
   async saveVehicle(vehicle: Vehicle, yardId: string) {
     const dbVehicle = this.mapVehicleToDb(vehicle, yardId);
     const { error } = await supabase.from('vehicles').upsert(dbVehicle);

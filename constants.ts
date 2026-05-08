@@ -88,6 +88,8 @@ export const WORKSHOP_SERVICES = [
   'Recall de Fábrica',
   'Instalação de Acessórios',
   'Polimento e Estética',
+  'Veículos Seminovos',
+  'PDI / Veículos Seminovos',
   'PDI',
   'PPF'
 ];
@@ -238,6 +240,23 @@ export const ALERT_THRESHOLDS = {
   CRITICAL: 100,
   SEVERE: 168
 };
+
+export const DEFAULT_YARD_OPTIONS = [
+  { id: 'overview', label: 'Overview', icon: 'fa-stream' },
+  { id: 'keyBoard', label: 'Quadro de Chaves', icon: 'fa-key' },
+  { id: 'dashboard', label: 'Visão Geral', icon: 'fa-chart-pie' },
+  { id: 'yard', label: 'Sub Solo Matriz', icon: 'fa-th-large' },
+  { id: 'yard2', label: 'Sub Solo Factory', icon: 'fa-th-large' },
+  { id: 'yard3', label: 'Pátio 3', icon: 'fa-warehouse' },
+  { id: 'yard4', label: '3° Piso Factory', icon: 'fa-th-large' },
+  { id: 'yardP1', label: 'Pátio P1', icon: 'fa-th-large' },
+  { id: 'yardP2', label: 'Pátio P2', icon: 'fa-th-large' },
+  { id: 'yardP6', label: 'Pátio P6', icon: 'fa-th-large' },
+  { id: 'yardCob', label: 'Cobertura Oficina', icon: 'fa-warehouse' },
+  { id: 'tasks', label: 'Tarefas', icon: 'fa-tasks' },
+  { id: 'idleHistory', label: 'Histórico Ociosidade', icon: 'fa-user-clock' },
+  { id: 'criticalReport', label: 'Casos Críticos', icon: 'fa-exclamation-circle' },
+];
 
 export const getSlotDisplayName = (index: number, row?: string, col?: number): string => {
   if (index >= 11 && index <= 30) {

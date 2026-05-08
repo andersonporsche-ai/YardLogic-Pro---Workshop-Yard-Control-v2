@@ -131,7 +131,14 @@
         100% { transform: translateY(300px); opacity: 0; }
       }
       
+      @keyframes shake {
+        0%, 100% { transform: translateX(0); }
+        10%, 30%, 50%, 70%, 90% { transform: translateX(-4px); }
+        20%, 40%, 60%, 80% { transform: translateX(4px); }
+      }
+      
       .animate-status-blue { animation: status-pulse-blue 2s ease-in-out infinite; }
+      .animate-shake { animation: shake 0.6s cubic-bezier(.36,.07,.19,.97) both; }
       .animate-status-amber { animation: status-pulse-amber 3s ease-in-out infinite; }
       .animate-stale-pulse { animation: stale-pulse 3s ease-in-out infinite; }
       .animate-status-green { animation: status-pulse-green 2.5s ease-in-out infinite; }
@@ -212,8 +219,60 @@
       }
 
       @media print {
-        .no-print { display: none !important; }
-        body { background: white !important; }
+        .print\:hidden, .no-print { display: none !important; }
+        .print\:overflow-visible { overflow: visible !important; }
+        .print\:h-auto { height: auto !important; }
+        .print\:p-0 { padding: 0 !important; }
+        .print\:mb-8 { margin-bottom: 2rem !important; }
+        
+        body, html { 
+          background: white !important; 
+          color: black !important;
+          print-color-adjust: exact;
+          -webkit-print-color-adjust: exact;
+          height: auto !important;
+          overflow: visible !important;
+        }
+        
+        h2, h3, h4, span, p { color: black !important; }
+        
+        .bg-white, .bg-slate-50, .bg-[#07080C], .bg-[#12141C], .bg-[#0A0B10] { 
+          background: white !important; 
+          border-color: #eee !important;
+        }
+        
+        .shadow-sm, .shadow-md, .shadow-lg, .shadow-xl, .shadow-2xl {
+          box-shadow: none !important;
+        }
+        
+        canvas {
+          max-width: 100% !important;
+          height: auto !important;
+        }
+        
+        .recharts-responsive-container {
+          width: 100% !important;
+          height: 300px !important;
+        }
+
+        /* Hide interactives in print */
+        button, .cursor-pointer, .no-print {
+          display: none !important;
+        }
+        
+        /* Ensure grids don't break in weird ways */
+        .grid {
+          display: block !important;
+        }
+        .grid > div {
+          margin-bottom: 20px !important;
+          page-break-inside: avoid !important;
+        }
+        
+        /* Specific Fixes for Charts in Print */
+        .recharts-surface {
+          overflow: visible !important;
+        }
       }
     </style>
     <script type="importmap">

@@ -3,9 +3,10 @@ import React, { useMemo, useState, useRef } from 'react';
 import { Vehicle, ActivityLog } from '../types';
 import { motion } from 'motion/react';
 import { MAX_SLOTS, CONSULTANTS, ALERT_THRESHOLDS } from '../constants';
-import { getYardInsights, getStrategicOptimization, getLayoutAndFlowOptimization } from '../services/geminiService';
+import { getYardInsights, getStrategicOptimization, getLayoutAndFlowOptimization, getStrategicOptimizationPro, getYardOptimizationSummary } from '../services/geminiService';
 import { analyzeYardEfficiency } from '../services/yardOptimization';
 import { toPng } from 'html-to-image';
+import Markdown from 'react-markdown';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
   PieChart, Pie, Cell, AreaChart, Area
@@ -47,9 +48,13 @@ const Dashboard: React.FC<DashboardProps> = ({
   const chartRef = useRef<HTMLDivElement>(null);
   const [aiInsights, setAiInsights] = useState<string | null>(null);
   const [strategicInsights, setStrategicInsights] = useState<string | null>(null);
+  const [strategicProInsights, setStrategicProInsights] = useState<string | null>(null);
   const [layoutInsights, setLayoutInsights] = useState<string | null>(null);
+  const [optimizationSummary, setOptimizationSummary] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isSummarizing, setIsSummarizing] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);
+  const [isOptimizingPro, setIsOptimizingPro] = useState(false);
   const [isOptimizingLayout, setIsOptimizingLayout] = useState(false);
   const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
 
@@ -83,12 +88,26 @@ const Dashboard: React.FC<DashboardProps> = ({
     setStrategicInsights(result);
     setIsOptimizing(false);
   };
+  
+  const handleGetStrategicPro = async () => {
+    setIsOptimizingPro(true);
+    const result = await getStrategicOptimizationPro(vehicles, activityLogs);
+    setStrategicProInsights(result);
+    setIsOptimizingPro(false);
+  };
 
   const handleGetLayoutOptimization = async () => {
     setIsOptimizingLayout(true);
     const result = await getLayoutAndFlowOptimization(vehicles, activityLogs, maxSlots);
     setLayoutInsights(result);
     setIsOptimizingLayout(false);
+  };
+
+  const handleGetOptimizationSummary = async () => {
+    setIsSummarizing(true);
+    const result = await getYardOptimizationSummary(vehicles, activityLogs);
+    setOptimizationSummary(result);
+    setIsSummarizing(false);
   };
 
   const stats = useMemo(() => {
@@ -180,6 +199,14 @@ const Dashboard: React.FC<DashboardProps> = ({
 
     const efficiency = analyzeYardEfficiency(vehicles);
 
+    // Filter critical relocations based on P6 capacity
+    const p6Data = allYardsData.find(y => y.id === 'yardP6' || y.name === 'Pátio P6');
+    const hasP6Space = p6Data ? p6Data.count < p6Data.maxSlots : true;
+    
+    if (!hasP6Space) {
+      efficiency.criticalRelocations = [];
+    }
+
     return { 
       occupiedCount: vehicles.length, 
       consultantData, 
@@ -193,7 +220,8 @@ const Dashboard: React.FC<DashboardProps> = ({
       topPeaks,
       turnoverRate,
       heatmapData,
-      efficiency
+      efficiency,
+      activeKeysCount: vehicles.length
     };
   }, [vehicles, activityLogs, allYardsData]);
 
@@ -232,28 +260,6 @@ const Dashboard: React.FC<DashboardProps> = ({
     document.body.removeChild(link);
   };
 
-  const handleDownloadOccupancyCSV = () => {
-    const headers = ['Pátio', 'Veículos Ativos', 'Capacidade Total', 'Ocupação (%)'];
-    const rows = stats.yardOccupancyData.map(y => [
-      y.name,
-      y.count,
-      y.maxSlots,
-      y.percentage.toFixed(1)
-    ]);
-
-    const csvContent = [
-      headers.join(','),
-      ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
-    ].join('\n');
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `ocupacao_patios_${new Date().toISOString().split('T')[0]}.csv`);
-    link.click();
-  };
-
   const handleDownloadOccupancyPNG = async () => {
     if (chartRef.current === null) return;
     
@@ -269,10 +275,10 @@ const Dashboard: React.FC<DashboardProps> = ({
   };
 
   return (
-    <div className={`flex flex-col gap-4 sm:gap-6 h-full overflow-y-auto custom-scrollbar transition-colors duration-700 p-4 sm:p-6 md:p-8 ${isDarkMode ? 'bg-[#07080C]' : 'bg-[#F9FAFB]'}`}>
+    <div className={`flex flex-col gap-4 sm:gap-6 h-full overflow-y-auto custom-scrollbar transition-colors duration-700 p-4 sm:p-6 md:p-8 print:h-auto print:overflow-visible print:p-0 ${isDarkMode ? 'bg-[#07080C]' : 'bg-[#F9FAFB]'}`}>
       
       {/* 1. Header de Status Crítico */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-6">
         <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border flex items-center justify-between gap-4 sm:gap-6 transition-all ${isDarkMode ? 'bg-red-500/5 border-red-500/20 shadow-[0_0_30px_rgba(239,68,44,0.05)]' : 'bg-red-50 border-red-100'}`}>
            <div className="flex items-center gap-4 sm:gap-6">
               <div className={`w-12 h-12 md:w-16 md:h-16 rounded-2xl md:rounded-3xl flex items-center justify-center text-white shadow-lg ${stats.healthData[2].value > 0 ? 'bg-red-500 animate-pulse' : 'bg-emerald-500'}`}>
@@ -305,6 +311,18 @@ const Dashboard: React.FC<DashboardProps> = ({
               <div>
                  <h3 className={`text-lg md:text-xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{stats.efficiency.efficiencyScore}% Eficiência</h3>
                  <p className="text-slate-500 text-[10px] md:text-sm font-medium uppercase tracking-widest">Fluxo de Logística</p>
+              </div>
+           </div>
+        </div>
+
+        <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border flex items-center justify-between gap-4 sm:gap-6 transition-all ${isDarkMode ? 'bg-violet-500/5 border-violet-500/20 shadow-[0_0_30px_rgba(139,92,246,0.05)]' : 'bg-violet-50 border-violet-100'}`}>
+           <div className="flex items-center gap-4 sm:gap-6">
+              <div className={`w-12 h-12 md:w-16 md:h-16 rounded-2xl md:rounded-3xl bg-violet-600 flex items-center justify-center text-white shadow-lg`}>
+                 <i className="fas fa-key text-xl md:text-2xl"></i>
+              </div>
+              <div>
+                 <h3 className={`text-lg md:text-xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{stats.activeKeysCount} Chaves Ativas</h3>
+                 <p className="text-slate-500 text-[10px] md:text-sm font-medium uppercase tracking-widest">Controle de Localização</p>
               </div>
            </div>
         </div>
@@ -341,126 +359,189 @@ const Dashboard: React.FC<DashboardProps> = ({
       )}
 
       {/* 1.2 Sugestões de Realocação (Otimização de Fluxo) */}
-      {stats.efficiency.misplacedVehicles.length > 0 && (
-        <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border transition-all ${isDarkMode ? 'bg-blue-500/[0.03] border-blue-500/10' : 'bg-blue-50/50 border-blue-100 shadow-sm'}`}>
-          <div className="flex items-center gap-4 mb-6">
-            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
-              <i className="fas fa-route text-xs sm:text-base"></i>
-            </div>
-            <div>
-              <h4 className={`text-xs sm:text-sm font-black uppercase tracking-widest ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Sugestões de Realocação</h4>
-              <p className="text-[10px] text-blue-500 font-bold uppercase tracking-tight">Otimizar pátio por serviço</p>
-            </div>
-          </div>
-          
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
-            {stats.efficiency.misplacedVehicles.slice(0, 6).map(v => (
-              <div key={v.id} className={`p-4 rounded-2xl border flex items-center gap-4 transition-all hover:scale-[1.02] ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-white border-blue-200'}`}>
-                <div className="w-10 h-10 rounded-xl bg-blue-100 text-blue-600 flex items-center justify-center text-xs shadow-inner">
-                  <i className="fas fa-exchange-alt"></i>
+      {(stats.efficiency.misplacedVehicles.length > 0 || stats.efficiency.criticalRelocations.length > 0) && (
+        <div className="flex flex-col gap-6">
+          {stats.efficiency.criticalRelocations.length > 0 && (
+            <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border transition-all ${isDarkMode ? 'bg-red-500/[0.03] border-red-500/20 shadow-[0_0_40px_rgba(239,68,68,0.05)]' : 'bg-red-50/50 border-red-100 shadow-sm'}`}>
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+                <div className="flex items-center gap-4">
+                  <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-red-600 flex items-center justify-center text-white shadow-lg shadow-red-500/20">
+                    <i className="fas fa-exclamation-circle text-xs sm:text-base"></i>
+                  </div>
+                  <div>
+                    <h4 className={`text-xs sm:text-sm font-black uppercase tracking-widest ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Realocação de Longa Permanência</h4>
+                    <p className="text-[10px] text-red-500 font-bold uppercase tracking-tight">Liberar vagas produtivas (Setor P6)</p>
+                  </div>
                 </div>
-                <div className="flex flex-col min-w-0">
-                  <h5 className={`text-xs font-black uppercase truncate ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>{v.model}</h5>
-                  <p className="text-[9px] font-bold text-slate-500 uppercase mt-0.5">
-                    Mover para: <span className="text-blue-600">
-                      {stats.efficiency.recommendations.find(r => r.vehicleId === v.id)?.suggestedYards.map(y => 
-                        y === 'yard' ? 'Sub Solo' : y.replace('yard', 'Pátio ')
-                      ).join(', ')}
-                    </span>
-                  </p>
-                  <span className="text-[8px] font-black italic text-slate-400 mt-1 uppercase tracking-tighter">Serviço: {v.service}</span>
+                <div className="px-3 py-1 bg-red-600/10 rounded-full">
+                  <span className="text-[9px] font-black text-red-500 uppercase tracking-widest">Estadia &gt; 48h</span>
                 </div>
               </div>
-            ))}
-          </div>
+              
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {stats.efficiency.criticalRelocations.map(v => (
+                  <div key={v.vehicleId} className={`p-5 rounded-2xl border flex items-center gap-4 transition-all hover:scale-[1.01] ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-white border-red-200'}`}>
+                    <div className="w-12 h-12 rounded-xl bg-red-100 text-red-600 flex items-center justify-center text-lg shadow-inner">
+                      <i className="fas fa-long-arrow-alt-right"></i>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex justify-between items-start mb-1">
+                        <h5 className={`text-xs font-black uppercase truncate ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>{v.model}</h5>
+                        <span className="text-[10px] font-black font-mono text-red-500">{v.stayHours}h</span>
+                      </div>
+                      <p className="text-[9px] font-bold text-slate-500 uppercase">
+                        De: <span className="text-slate-400">{v.currentYard === 'yard' ? 'Sub Solo' : v.currentYard.replace('yard', 'Pátio ')}</span> 
+                        <i className="fas fa-chevron-right mx-2 text-[7px]"></i>
+                        Para: <span className="text-blue-600 font-black">Setor P6</span>
+                      </p>
+                      <div className="mt-2 flex items-center gap-2">
+                        <div className="h-1 flex-1 bg-slate-100 rounded-full overflow-hidden">
+                          <div className="h-full bg-red-500" style={{ width: '100%' }}></div>
+                        </div>
+                        <span className="text-[8px] font-black text-red-500 uppercase">Prioridade Máxima</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {stats.efficiency.misplacedVehicles.length > 0 && (
+            <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border transition-all ${isDarkMode ? 'bg-blue-500/[0.03] border-blue-500/10' : 'bg-blue-50/50 border-blue-100 shadow-sm'}`}>
+              <div className="flex items-center gap-4 mb-6">
+                <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
+                  <i className="fas fa-route text-xs sm:text-base"></i>
+                </div>
+                <div>
+                  <h4 className={`text-xs sm:text-sm font-black uppercase tracking-widest ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Sugestões de Realocação</h4>
+                  <p className="text-[10px] text-blue-500 font-bold uppercase tracking-tight">Otimizar pátio por serviço</p>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+                {stats.efficiency.misplacedVehicles.slice(0, 6).map(v => (
+                  <div key={v.id} className={`p-4 rounded-2xl border flex items-center gap-4 transition-all hover:scale-[1.02] ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-white border-blue-200'}`}>
+                    <div className="w-10 h-10 rounded-xl bg-blue-100 text-blue-600 flex items-center justify-center text-xs shadow-inner">
+                      <i className="fas fa-exchange-alt"></i>
+                    </div>
+                    <div className="flex flex-col min-w-0">
+                      <h5 className={`text-xs font-black uppercase truncate ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>{v.model}</h5>
+                      <p className="text-[9px] font-bold text-slate-500 uppercase mt-0.5">
+                        Mover para: <span className="text-blue-600">
+                          {stats.efficiency.recommendations.find(r => r.vehicleId === v.id)?.suggestedYards.map(y => 
+                            y === 'yard' ? 'Sub Solo' : y.replace('yard', 'Pátio ')
+                          ).join(', ')}
+                        </span>
+                      </p>
+                      <span className="text-[8px] font-black italic text-slate-400 mt-1 uppercase tracking-tighter">Serviço: {v.service}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
-      {/* 2. Yard Occupancy Chart */}
-      <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border shadow-sm transition-colors ${isDarkMode ? 'bg-[#12141C] border-white/5' : 'bg-white border-slate-100'}`}>
-        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-8 gap-6">
-          <div className="flex items-center gap-4">
-            <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
-              <i className="fas fa-warehouse text-base"></i>
+      {/* 2. Optimized Yard Occupancy Chart */}
+      <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border shadow-xl transition-all ${isDarkMode ? 'bg-[#12141C] border-white/5 shadow-blue-900/5' : 'bg-white border-slate-100 shadow-slate-200/50'}`}>
+        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-10 gap-6">
+          <div className="flex items-center gap-5">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-700 flex items-center justify-center text-white shadow-xl shadow-blue-500/20">
+              <i className="fas fa-chart-bar text-lg"></i>
             </div>
             <div>
-              <h3 className={`text-xs sm:text-sm font-black uppercase tracking-widest ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Ocupação por Pátio</h3>
-              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-tight">Distribuição de Veículos e Capacidade</p>
+              <h3 className={`text-sm sm:text-base font-black uppercase tracking-widest ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Monitor de Capacidade Operacional</h3>
+              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-tight">Ocupação vs. Limite Técnico por Pátio</p>
             </div>
           </div>
           
-          <div className="flex flex-wrap items-center gap-4 no-print">
-            <div className="hidden sm:flex items-center gap-6 mr-4 border-r border-slate-500/10 pr-6">
+          <div className="flex flex-wrap items-center gap-4 no-print bg-slate-500/5 p-2 rounded-2xl border border-white/5">
+            <div className="flex items-center gap-6 px-4 py-1">
               <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
-                <span className="text-[9px] font-black text-slate-500 uppercase">Baixo (&lt;60%)</span>
+                <div className="w-3 h-3 rounded-full bg-emerald-500 border-2 border-white/20"></div>
+                <span className="text-[9px] font-black text-slate-500 uppercase">Ideal (&lt;60%)</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-amber-500"></div>
-                <span className="text-[9px] font-black text-slate-500 uppercase">Médio (60-90%)</span>
+                <div className="w-3 h-3 rounded-full bg-amber-500 border-2 border-white/20"></div>
+                <span className="text-[9px] font-black text-slate-500 uppercase">Alerta (60-90%)</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-red-500"></div>
-                <span className="text-[9px] font-black text-slate-500 uppercase">Alto (&gt;90%)</span>
+                <div className="w-3 h-3 rounded-full bg-red-500 border-2 border-white/20"></div>
+                <span className="text-[9px] font-black text-slate-500 uppercase">Crítico (&gt;90%)</span>
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 border-l border-white/10 pl-4">
               <button 
                 onClick={handleDownloadOccupancyPNG}
-                className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest border transition-all flex items-center gap-2 ${isDarkMode ? 'bg-white/5 border-white/10 text-white hover:bg-white/10' : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'}`}
-                title="Download do Gráfico em PNG"
+                className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest border transition-all flex items-center gap-2 ${isDarkMode ? 'bg-white/5 border-white/10 text-white hover:bg-white/10' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100 shadow-sm'}`}
               >
-                <i className="fas fa-image"></i>
+                <i className="fas fa-download text-xs text-blue-500"></i>
                 PNG
-              </button>
-              <button 
-                onClick={handleDownloadOccupancyCSV}
-                className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest border transition-all flex items-center gap-2 ${isDarkMode ? 'bg-white/5 border-white/10 text-white hover:bg-white/10' : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'}`}
-                title="Download dos Dados em CSV"
-              >
-                <i className="fas fa-file-csv"></i>
-                CSV
               </button>
             </div>
           </div>
         </div>
-        <div ref={chartRef} className="h-[350px] w-full pt-4">
+
+        <div ref={chartRef} className="h-[400px] w-full">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={stats.yardOccupancyData} margin={{ top: 20, right: 30, left: 20, bottom: 80 }} barGap={-40}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDarkMode ? "#ffffff05" : "#00000005"} />
+            <BarChart data={stats.yardOccupancyData} margin={{ top: 20, right: 30, left: 10, bottom: 60 }}>
+              <defs>
+                <linearGradient id="capacityGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={isDarkMode ? "#ffffff" : "#000000"} stopOpacity={0.08}/>
+                  <stop offset="95%" stopColor={isDarkMode ? "#ffffff" : "#000000"} stopOpacity={0.02}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDarkMode ? "#ffffff08" : "#00000008"} />
               <XAxis 
                 dataKey="name" 
                 axisLine={false} 
                 tickLine={false} 
-                tick={{ fontSize: 9, fontWeight: 900, fill: '#64748b' }}
+                tick={{ fontSize: 10, fontWeight: 900, fill: '#64748b' }}
                 interval={0}
                 angle={-45}
                 textAnchor="end"
               />
-              <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 700, fill: '#64748b', fontFamily: 'monospace' }} />
+              <YAxis 
+                axisLine={false} 
+                tickLine={false} 
+                tick={{ fontSize: 11, fontWeight: 700, fill: '#64748b' }} 
+              />
               <Tooltip 
-                cursor={{ fill: isDarkMode ? '#ffffff05' : '#f8fafc' }}
+                cursor={{ fill: isDarkMode ? '#ffffff05' : '#f1f5f9' }}
                 content={({ active, payload }) => {
                   if (active && payload && payload.length) {
                     const data = payload[0].payload;
+                    const statusColor = data.percentage >= 90 ? '#ef4444' : data.percentage >= 60 ? '#f59e0b' : '#10b981';
                     return (
-                      <div className={`p-4 rounded-2xl shadow-2xl border backdrop-blur-xl ${isDarkMode ? 'bg-[#1e293b]/90 border-white/10 text-white' : 'bg-white/90 border-slate-200 text-slate-900'}`}>
-                        <p className="text-[10px] font-black uppercase tracking-widest mb-2 border-b border-white/10 pb-2">{data.name}</p>
-                        <div className="space-y-1">
-                          <div className="flex justify-between gap-8">
-                            <span className="text-[9px] font-bold uppercase text-slate-400">Veículos:</span>
-                            <span className="text-[11px] font-black font-mono">{data.count}</span>
+                      <div className={`p-5 rounded-[1.5rem] shadow-2xl border-2 backdrop-blur-2xl ${isDarkMode ? 'bg-[#0f172a]/95 border-white/10 text-white' : 'bg-white/95 border-slate-100 text-slate-900'}`}>
+                        <div className="flex items-center gap-3 mb-4 border-b border-white/5 pb-3">
+                          <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs" style={{ backgroundColor: statusColor }}>
+                            <i className="fas fa-warehouse"></i>
                           </div>
-                          <div className="flex justify-between gap-8">
-                            <span className="text-[9px] font-bold uppercase text-slate-400">Capacidade:</span>
-                            <span className="text-[11px] font-black font-mono">{data.maxSlots}</span>
+                          <span className="text-[11px] font-black uppercase tracking-widest">{data.name}</span>
+                        </div>
+                        <div className="space-y-3">
+                          <div className="flex justify-between items-center gap-12">
+                            <span className="text-[9px] font-black uppercase text-slate-500">Ocupados</span>
+                            <span className="text-sm font-black font-mono text-blue-500">{data.count}</span>
                           </div>
-                          <div className="flex justify-between gap-8 pt-1 border-t border-white/5 mt-1">
-                            <span className="text-[9px] font-bold uppercase text-slate-400">Ocupação:</span>
-                            <span className={`text-[11px] font-black font-mono ${data.percentage >= 90 ? 'text-red-500' : data.percentage >= 60 ? 'text-orange-500' : 'text-emerald-500'}`}>
-                              {data.percentage.toFixed(1)}%
-                            </span>
+                          <div className="flex justify-between items-center gap-12">
+                            <span className="text-[9px] font-black uppercase text-slate-500">Capacidade</span>
+                            <span className="text-sm font-black font-mono text-slate-400">{data.maxSlots}</span>
+                          </div>
+                          <div className="flex justify-between items-center gap-12 pt-3 border-t border-white/5">
+                            <span className="text-[9px] font-black uppercase text-slate-500">Ocupação</span>
+                            <div className="flex items-center gap-2">
+                              <div className="w-20 h-1.5 bg-slate-500/20 rounded-full overflow-hidden">
+                                <div className="h-full rounded-full" style={{ width: `${data.percentage}%`, backgroundColor: statusColor }}></div>
+                              </div>
+                              <span className="text-[11px] font-black font-mono" style={{ color: statusColor }}>
+                                {data.percentage.toFixed(1)}%
+                              </span>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -471,15 +552,19 @@ const Dashboard: React.FC<DashboardProps> = ({
               />
               <Bar 
                 dataKey="maxSlots" 
-                fill={isDarkMode ? '#ffffff05' : '#00000005'} 
-                radius={[10, 10, 0, 0]} 
-                barSize={40} 
-                isAnimationActive={false} 
+                name="Capacidade"
+                fill="url(#capacityGradient)"
+                radius={[8, 8, 0, 0]} 
+                barSize={32} 
+                isAnimationActive={true}
               />
               <Bar 
                 dataKey="count" 
-                radius={[10, 10, 0, 0]} 
-                barSize={40}
+                name="Veículos"
+                radius={[8, 8, 0, 0]} 
+                barSize={32}
+                isAnimationActive={true}
+                animationDuration={1500}
                 style={{ cursor: onYardClick ? 'pointer' : 'default' }}
                 onClick={(data) => {
                   if (onYardClick && data && data.name) {
@@ -498,7 +583,23 @@ const Dashboard: React.FC<DashboardProps> = ({
             </BarChart>
           </ResponsiveContainer>
         </div>
+        
+        <div className="mt-8 flex justify-center gap-8 no-print">
+          <div className="flex flex-col items-center gap-1">
+             <div className="w-32 h-1 rounded-full bg-slate-500/10 overflow-hidden">
+                <div className="h-full bg-blue-500" style={{ width: '100%' }}></div>
+             </div>
+             <span className="text-[8px] font-black text-slate-500 uppercase tracking-tighter">Barras de Capacidade</span>
+          </div>
+          <div className="flex flex-col items-center gap-1">
+             <div className="w-32 h-1 rounded-full bg-slate-500/10 overflow-hidden">
+                <div className="h-full bg-indigo-500" style={{ width: '40%' }}></div>
+             </div>
+             <span className="text-[8px] font-black text-slate-500 uppercase tracking-tighter">Ocupação Atual</span>
+          </div>
+        </div>
       </div>
+
 
       {/* 2.1 Porcentagem de Ocupação por Pátio */}
       <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border shadow-sm transition-colors ${isDarkMode ? 'bg-[#12141C] border-white/5' : 'bg-white border-slate-100'}`}>
@@ -546,6 +647,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                 dataKey="percentage" 
                 radius={[0, 10, 10, 0]} 
                 barSize={24}
+                isAnimationActive={false}
               >
                 {stats.yardOccupancyData.map((entry, index) => (
                   <Cell 
@@ -638,34 +740,124 @@ const Dashboard: React.FC<DashboardProps> = ({
       </div>
 
       {/* 3. AI ADVISOR PANEL */}
-      <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border transition-all relative overflow-hidden ${isDarkMode ? 'bg-blue-500/5 border-blue-500/20' : 'bg-blue-50 border-blue-100'}`}>
-        <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/10 rounded-bl-full animate-pulse-subtle"></div>
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-6">
-          <div className="flex items-center gap-4">
-            <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white">
-              <i className="fas fa-robot"></i>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+        {/* Quick Optimization Summary */}
+        <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border transition-all relative overflow-hidden ${isDarkMode ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-emerald-50 border-emerald-100'}`}>
+          <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/10 rounded-bl-full animate-pulse-subtle"></div>
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 mb-6">
+            <div className="flex items-center gap-4">
+              <div className="w-10 h-10 rounded-xl bg-emerald-600 flex items-center justify-center text-white shadow-lg shadow-emerald-500/20">
+                <i className="fas fa-bolt"></i>
+              </div>
+              <div>
+                <h4 className={`text-sm font-black uppercase tracking-widest ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Resumo de Otimização</h4>
+                <p className="text-[10px] text-emerald-500 font-bold uppercase tracking-tight">Insights Rápidos via IA</p>
+              </div>
             </div>
-            <div>
-              <h4 className={`text-sm font-black uppercase tracking-widest ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>AI Strategy Advisor</h4>
-              <p className="text-[10px] text-blue-500 font-bold uppercase tracking-tight">Recomendações Táticas Baseadas no Pátio</p>
-            </div>
+            <button 
+              onClick={handleGetOptimizationSummary}
+              disabled={isSummarizing || hasApiKey === false}
+              className={`no-print px-4 py-2 rounded-xl font-black text-[9px] uppercase tracking-widest transition-all ${isSummarizing || hasApiKey === false ? 'bg-slate-500 opacity-50' : 'bg-emerald-600 hover:bg-emerald-500 shadow-lg shadow-emerald-500/20'} text-white`}
+            >
+              {isSummarizing ? <><i className="fas fa-spinner fa-spin mr-2"></i> Sumarizando...</> : <><i className="fas fa-magic mr-2"></i> Gerar Resumo</>}
+            </button>
           </div>
-          <button 
-            onClick={handleGetInsights}
-            disabled={isGenerating}
-            className={`no-print px-6 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all ${isGenerating ? 'bg-slate-500 opacity-50' : 'bg-blue-600 hover:bg-blue-500 shadow-lg shadow-blue-500/20'} text-white`}
-          >
-            {isGenerating ? <><i className="fas fa-spinner fa-spin mr-2"></i> Analisando...</> : <><i className="fas fa-brain mr-2"></i> Gerar Insights</>}
-          </button>
+
+          {optimizationSummary ? (
+            <div className={`p-5 rounded-2xl border animate-card-fade-in ${isDarkMode ? 'bg-[#161922] border-white/5 text-slate-300' : 'bg-white border-emerald-100 text-slate-700 shadow-sm'}`}>
+              <div className={`markdown-body ${isDarkMode ? 'prose-invert' : ''} text-[11px] leading-relaxed`}>
+                <Markdown>{optimizationSummary}</Markdown>
+              </div>
+            </div>
+          ) : (
+            <div className="no-print py-8 flex flex-col items-center justify-center border-2 border-dashed border-emerald-500/10 rounded-[2rem]">
+               <h5 className={`text-[9px] font-black uppercase tracking-widest ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>Aguardando Solicitação</h5>
+            </div>
+          )}
         </div>
 
-        {aiInsights ? (
-          <div className={`p-6 rounded-2xl border leading-relaxed animate-card-fade-in ${isDarkMode ? 'bg-[#161922] border-white/5 text-slate-300' : 'bg-white border-blue-100 text-slate-700'}`}>
-            <p className="whitespace-pre-line text-xs font-medium">{aiInsights}</p>
+        {/* Existing Tactic Advisor */}
+        <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border transition-all relative overflow-hidden ${isDarkMode ? 'bg-blue-500/5 border-blue-500/20' : 'bg-blue-50 border-blue-100'}`}>
+          <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/10 rounded-bl-full animate-pulse-subtle"></div>
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 mb-6">
+            <div className="flex items-center gap-4">
+              <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white">
+                <i className="fas fa-robot"></i>
+              </div>
+              <div>
+                <h4 className={`text-sm font-black uppercase tracking-widest ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>AI Strategy Advisor</h4>
+                <p className="text-[10px] text-blue-500 font-bold uppercase tracking-tight">Recomendações Táticas</p>
+              </div>
+            </div>
+            <button 
+              onClick={handleGetInsights}
+              disabled={isGenerating || hasApiKey === false}
+              className={`no-print px-4 py-2 rounded-xl font-black text-[9px] uppercase tracking-widest transition-all ${isGenerating || hasApiKey === false ? 'bg-slate-500 opacity-50' : 'bg-blue-600 hover:bg-blue-500 shadow-lg shadow-blue-500/20'} text-white`}
+            >
+              {isGenerating ? <><i className="fas fa-spinner fa-spin mr-2"></i> Analisando...</> : <><i className="fas fa-brain mr-2"></i> Gerar Tática</>}
+            </button>
+          </div>
+
+          {aiInsights ? (
+            <div className={`p-5 rounded-2xl border animate-card-fade-in ${isDarkMode ? 'bg-[#161922] border-white/5 text-slate-300' : 'bg-white border-blue-100 text-slate-700 shadow-sm'}`}>
+              <p className="whitespace-pre-line text-[11px] font-medium leading-relaxed">{aiInsights}</p>
+            </div>
+          ) : (
+            <div className="no-print py-8 flex flex-col items-center justify-center border-2 border-dashed border-blue-500/10 rounded-[2rem]">
+               <h5 className={`text-[9px] font-black uppercase tracking-widest ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>Aguardando Solicitação</h5>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 3.1 COMPREHENSIVE STRATEGIC OPTIMIZATION PANEL */}
+      <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border transition-all relative overflow-hidden ${isDarkMode ? 'bg-indigo-500/5 border-indigo-500/20' : 'bg-indigo-50 border-indigo-100 shadow-sm'}`}>
+        <div className="absolute top-0 right-0 w-48 h-48 bg-indigo-500/10 rounded-bl-full animate-pulse-subtle"></div>
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-8">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-indigo-600 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20">
+              <i className="fas fa-microchip text-xl"></i>
+            </div>
+            <div>
+              <h4 className={`text-base font-black uppercase tracking-widest ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Sugestões de Otimização Estratégica</h4>
+              <p className="text-[10px] text-indigo-500 font-bold uppercase tracking-tight">Análise Avançada de Realocação, Fluxo e Layout</p>
+            </div>
+          </div>
+          
+          <button 
+            onClick={handleGetStrategicPro}
+            disabled={isOptimizingPro || hasApiKey === false}
+            className={`no-print px-8 py-4 rounded-2xl font-black text-[11px] uppercase tracking-widest transition-all ${isOptimizingPro || hasApiKey === false ? 'bg-slate-500 opacity-50' : 'bg-indigo-600 hover:bg-indigo-500 shadow-xl shadow-indigo-500/30'} text-white flex items-center gap-3`}
+          >
+            {isOptimizingPro ? <><i className="fas fa-spinner fa-spin"></i> Otimizando...</> : <><i className="fas fa-sparkles"></i> Gerar Recomendações</>}
+          </button>
+        </div>
+        
+        {strategicProInsights ? (
+          <div className={`p-8 rounded-[2rem] border animate-card-fade-in ${isDarkMode ? 'bg-[#12141C] border-white/5' : 'bg-white border-indigo-100 shadow-inner'}`}>
+             <div className={`markdown-body ${isDarkMode ? 'prose-invert' : ''} text-xs leading-relaxed`}>
+                <Markdown>{strategicProInsights}</Markdown>
+             </div>
+             <div className="mt-8 pt-6 border-t border-dashed border-indigo-500/10 flex justify-between items-center">
+                <span className="text-[9px] font-black text-slate-400 uppercase">Consultoria de IA • YardLogic Pro</span>
+                <button 
+                  onClick={() => {
+                    navigator.clipboard.writeText(strategicProInsights);
+                    alert('Recomendações copiadas!');
+                  }}
+                  className="px-4 py-2 rounded-lg bg-indigo-500/10 text-indigo-500 text-[9px] font-black uppercase hover:bg-indigo-500 hover:text-white transition-all"
+                >
+                  <i className="fas fa-copy mr-2"></i> Copiar
+                </button>
+             </div>
           </div>
         ) : (
-          <div className="no-print text-center py-4">
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Clique para analisar a logística atual</p>
+          <div className="no-print py-12 flex flex-col items-center justify-center border-2 border-dashed border-indigo-500/10 rounded-[2.5rem]">
+             <div className="w-16 h-16 rounded-full bg-indigo-500/5 flex items-center justify-center text-indigo-500/30 mb-4">
+                <i className="fas fa-brain-circuit text-3xl"></i>
+             </div>
+             <h5 className={`text-xs font-black uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>IA Pronta para Análise</h5>
+             <p className="text-[10px] text-slate-400 font-bold uppercase mt-1">Acione o botão para otimizar a logística do pátio</p>
           </div>
         )}
       </div>
@@ -880,7 +1072,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                     }}
                     itemStyle={{ fontSize: '11px', fontWeight: '900', color: '#3b82f6', textTransform: 'uppercase' }}
                   />
-                  <Area type="monotone" dataKey="count" stroke="#3b82f6" strokeWidth={4} fillOpacity={1} fill="url(#colorFlow)" />
+                  <Area type="monotone" dataKey="count" stroke="#3b82f6" strokeWidth={4} fillOpacity={1} fill="url(#colorFlow)" isAnimationActive={false} />
                 </AreaChart>
               </ResponsiveContainer>
             </div>

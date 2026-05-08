@@ -12,10 +12,11 @@ interface VehicleHistoryProps {
   vehicleModel: string;
   logs: ActivityLog[];
   onClose: () => void;
+  onAddNote?: (note: string) => void;
   isDarkMode?: boolean;
 }
 
-const VehicleHistory: React.FC<VehicleHistoryProps> = ({ vehicleId, vehicleModel, logs, onClose, isDarkMode = false }) => {
+const VehicleHistory: React.FC<VehicleHistoryProps> = ({ vehicleId, vehicleModel, logs, onClose, onAddNote, isDarkMode = false }) => {
   const [searchTerm, setSearchTerm] = useState(() => localStorage.getItem('yard_history_search') || '');
   const [startDate, setStartDate] = useState<string>(() => localStorage.getItem('yard_history_start') || '');
   const [endDate, setEndDate] = useState<string>(() => localStorage.getItem('yard_history_end') || '');
@@ -23,6 +24,8 @@ const VehicleHistory: React.FC<VehicleHistoryProps> = ({ vehicleId, vehicleModel
   const [plateFilter, setPlateFilter] = useState(() => localStorage.getItem('yard_history_plate') || '');
   const [slaFilter, setSlaFilter] = useState<string>(() => localStorage.getItem('yard_history_sla') || 'all');
   const [visibleCount, setVisibleCount] = useState(10);
+  const [newNote, setNewNote] = useState('');
+  const [isAddingNote, setIsAddingNote] = useState(false);
 
   // Removed the useEffect that was causing cascading renders
   // setVisibleCount(10) will be called in handlers
@@ -125,6 +128,7 @@ const VehicleHistory: React.FC<VehicleHistoryProps> = ({ vehicleId, vehicleModel
       case 'exit': return { icon: 'fa-flag-checkered', color: isDarkMode ? 'bg-slate-700' : 'bg-slate-900', label: 'Saída' };
       case 'status_change': return { icon: 'fa-sync-alt', color: 'bg-blue-500', label: 'Status' };
       case 'consultant_change': return { icon: 'fa-user-tie', color: 'bg-purple-500', label: 'Consultor' };
+      case 'note': return { icon: 'fa-sticky-note', color: 'bg-amber-500', label: 'Anotação' };
       default: return { icon: 'fa-info-circle', color: 'bg-slate-400', label: 'Evento' };
     }
   };
@@ -144,6 +148,54 @@ const VehicleHistory: React.FC<VehicleHistoryProps> = ({ vehicleId, vehicleModel
             </button>
           </div>
           
+          <div className="flex flex-col gap-3 mb-6">
+            <div className="relative">
+              <i className={`fas fa-id-card absolute left-4 top-1/2 -translate-y-1/2 text-xs ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}></i>
+              <input
+                type="text"
+                placeholder="PESQUISAR POR PLACA..."
+                value={plateFilter}
+                onChange={(e) => { setPlateFilter(e.target.value.toUpperCase()); setVisibleCount(10); }}
+                className={`w-full pl-10 pr-4 py-3 rounded-2xl text-[10px] font-bold uppercase tracking-widest outline-none transition-all border ${
+                  isDarkMode 
+                    ? 'bg-blue-600/10 border-blue-500/20 text-white focus:border-blue-500/50 focus:bg-blue-600/20' 
+                    : 'bg-white border-slate-200 text-slate-700 focus:border-blue-500/30 focus:shadow-lg focus:shadow-blue-500/5'
+                }`}
+              />
+              {plateFilter && (
+                <button 
+                  onClick={() => setPlateFilter('')}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  <i className="fas fa-times-circle"></i>
+                </button>
+              )}
+            </div>
+
+            <div className="relative">
+              <i className={`fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-xs ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}></i>
+              <input
+                type="text"
+                placeholder="BUSCAR NO CONTEÚDO..."
+                value={searchTerm}
+                onChange={(e) => { setSearchTerm(e.target.value); setVisibleCount(10); }}
+                className={`w-full pl-10 pr-4 py-3 rounded-2xl text-[10px] font-bold uppercase tracking-widest outline-none transition-all border ${
+                  isDarkMode 
+                    ? 'bg-white/5 border-white/5 text-white focus:border-blue-500/50 focus:bg-white/10' 
+                    : 'bg-white border-slate-200 text-slate-700 focus:border-blue-500/30 focus:shadow-lg focus:shadow-blue-500/5'
+                }`}
+              />
+              {searchTerm && (
+                <button 
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  <i className="fas fa-times-circle"></i>
+                </button>
+              )}
+            </div>
+          </div>
+          
           <div className="grid grid-cols-2 gap-4 mb-6">
             <div className={`p-4 rounded-2xl border ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}>
               <span className="block text-[9px] font-black text-slate-400 uppercase mb-1">Eventos</span>
@@ -156,6 +208,48 @@ const VehicleHistory: React.FC<VehicleHistoryProps> = ({ vehicleId, vehicleModel
               </div>
             )}
           </div>
+
+          {onAddNote && (
+            <div className="mb-6">
+              <button 
+                onClick={() => setIsAddingNote(!isAddingNote)}
+                className={`w-full h-12 rounded-2xl flex items-center justify-center gap-2 text-[10px] font-black uppercase tracking-widest transition-all ${isDarkMode ? 'bg-blue-600/10 text-blue-400 hover:bg-blue-600/20' : 'bg-blue-50 text-blue-600 hover:bg-blue-100'}`}
+              >
+                <i className={`fas ${isAddingNote ? 'fa-times' : 'fa-plus'}`}></i>
+                {isAddingNote ? 'Cancelar Anotação' : 'Adicionar Anotação'}
+              </button>
+              
+              {isAddingNote && (
+                <div className="mt-3 animate-in slide-in-from-top-2">
+                  <textarea 
+                    value={newNote}
+                    onChange={(e) => setNewNote(e.target.value)}
+                    placeholder="DIGITE SUA ANOTAÇÃO AQUI..."
+                    className={`w-full p-4 rounded-2xl text-[10px] font-bold uppercase tracking-widest outline-none transition-all border h-24 resize-none ${
+                      isDarkMode 
+                        ? 'bg-white/5 border-white/5 text-white focus:border-blue-500/50' 
+                        : 'bg-white border-slate-200 text-slate-700 focus:border-blue-500/30'
+                    }`}
+                  />
+                  <div className="flex justify-end mt-2">
+                    <button 
+                      onClick={() => {
+                        if (newNote.trim()) {
+                          onAddNote(newNote);
+                          setNewNote('');
+                          setIsAddingNote(false);
+                        }
+                      }}
+                      disabled={!newNote.trim()}
+                      className="px-6 py-2 bg-blue-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest disabled:opacity-50"
+                    >
+                      Salvar Manual
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="mb-6">
             <div className="flex items-center justify-between mb-2 px-1">
@@ -215,6 +309,7 @@ const VehicleHistory: React.FC<VehicleHistoryProps> = ({ vehicleId, vehicleModel
                     <option value="exit">SAÍDA / FINALIZADO</option>
                     <option value="status_change">MUDANÇA DE STATUS</option>
                     <option value="consultant_change">TROCA DE CONSULTOR</option>
+                    <option value="note">ANOTAÇÕES / OBS.</option>
                   </select>
                   <i className={`fas fa-chevron-down absolute right-3 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}></i>
                 </div>
@@ -238,54 +333,6 @@ const VehicleHistory: React.FC<VehicleHistoryProps> = ({ vehicleId, vehicleModel
                   <i className={`fas fa-chevron-down absolute right-3 top-1/2 -translate-y-1/2 text-[10px] pointer-events-none ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}></i>
                 </div>
               </div>
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-3">
-            <div className="relative">
-              <i className={`fas fa-id-card absolute left-4 top-1/2 -translate-y-1/2 text-xs ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}></i>
-              <input
-                type="text"
-                placeholder="PESQUISAR POR PLACA..."
-                value={plateFilter}
-                onChange={(e) => { setPlateFilter(e.target.value.toUpperCase()); setVisibleCount(10); }}
-                className={`w-full pl-10 pr-4 py-3 rounded-2xl text-[10px] font-bold uppercase tracking-widest outline-none transition-all border ${
-                  isDarkMode 
-                    ? 'bg-white/5 border-white/5 text-white focus:border-blue-500/50 focus:bg-white/10' 
-                    : 'bg-slate-50 border-slate-100 text-slate-700 focus:border-blue-500/30 focus:bg-white'
-                }`}
-              />
-              {plateFilter && (
-                <button 
-                  onClick={() => setPlateFilter('')}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
-                >
-                  <i className="fas fa-times-circle"></i>
-                </button>
-              )}
-            </div>
-
-            <div className="relative">
-              <i className={`fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-xs ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}></i>
-              <input
-                type="text"
-                placeholder="BUSCAR NO CONTEÚDO..."
-                value={searchTerm}
-                onChange={(e) => { setSearchTerm(e.target.value); setVisibleCount(10); }}
-                className={`w-full pl-10 pr-4 py-3 rounded-2xl text-[10px] font-bold uppercase tracking-widest outline-none transition-all border ${
-                  isDarkMode 
-                    ? 'bg-white/5 border-white/5 text-white focus:border-blue-500/50 focus:bg-white/10' 
-                    : 'bg-slate-50 border-slate-100 text-slate-700 focus:border-blue-500/30 focus:bg-white'
-                }`}
-              />
-              {searchTerm && (
-                <button 
-                  onClick={() => setSearchTerm('')}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
-                >
-                  <i className="fas fa-times-circle"></i>
-                </button>
-              )}
             </div>
           </div>
         </div>

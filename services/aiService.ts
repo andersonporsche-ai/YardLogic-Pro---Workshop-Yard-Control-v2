@@ -1,40 +1,91 @@
 import { GoogleGenAI } from "@google/genai";
-import { YARD_LAYOUT, YARD_LAYOUT_FACTORY, YARD_LAYOUT_1ST_FLOOR, YARD_LAYOUT_1ST_FACTORY, YARD_LAYOUT_P1, YARD_LAYOUT_P2, YARD_LAYOUT_P6, YARD_LAYOUT_COBERTURA } from "../constants";
-import { Vehicle } from "../types";
+import { Vehicle, ActivityLog } from "../types";
+import { differenceInHours, parseISO } from "date-fns";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
-export const generateOptimizationSuggestions = async (allVehicles: Vehicle[]) => {
+export const generateOptimizationSuggestions = async (allVehicles: Vehicle[], allLogs: ActivityLog[]) => {
   const model = "gemini-3.1-pro-preview";
   
+  // 1. Calcular estatísticas de permanência
+  const now = new Date();
+  const stayTimeStats = allVehicles.map(v => {
+    const entryDate = parseISO(v.entryTime);
+    const hours = differenceInHours(now, entryDate);
+    return {
+      id: v.id,
+      model: v.model,
+      hours,
+      washStatus: v.washStatus,
+      yardId: v.yardId
+    };
+  });
+
+  const avgStayTime = stayTimeStats.length > 0 
+    ? stayTimeStats.reduce((acc, curr) => acc + curr.hours, 0) / stayTimeStats.length 
+    : 0;
+
+  // 2. Agrupar por status de lavagem
+  const washStatusCounts = allVehicles.reduce((acc: Record<string, number>, v) => {
+    acc[v.washStatus] = (acc[v.washStatus] || 0) + 1;
+    return acc;
+  }, {});
+
+  // 3. Analisar fluxo (movimentações recentes)
+  const recentMoves = allLogs
+    .filter(log => log.action === 'status_change' || log.details.includes('movido'))
+    .slice(-20)
+    .map(log => ({
+      time: log.timestamp,
+      details: log.details,
+      vehicle: log.vehiclePlate
+    }));
+
   const yardContext = {
-    matriz: { layout: YARD_LAYOUT, occupancy: allVehicles.filter(v => v.slotIndex < 100).length }, // Rough estimation based on slot ranges if not explicitly tagged
-    factorySubSolo: { layout: YARD_LAYOUT_FACTORY },
-    factory1st: { layout: YARD_LAYOUT_1ST_FLOOR },
-    factory3rd: { layout: YARD_LAYOUT_1ST_FACTORY },
-    p1: { layout: YARD_LAYOUT_P1 },
-    p2: { layout: YARD_LAYOUT_P2 },
-    p6: { layout: YARD_LAYOUT_P6 },
-    cobertura: { layout: YARD_LAYOUT_COBERTURA }
+    statistics: {
+      totalVehicles: allVehicles.length,
+      averageStayHours: avgStayTime.toFixed(1),
+      criticalStayCount: stayTimeStats.filter(s => s.hours > 48).length, // Mais de 2 dias
+      washStatusDistribution: washStatusCounts
+    },
+    yards: {
+      matriz: { occupancy: allVehicles.filter(v => v.yardId === 'yard').length },
+      factorySubSolo: { occupancy: allVehicles.filter(v => v.yardId === 'yard2').length },
+      factory1st: { occupancy: allVehicles.filter(v => v.yardId === 'yard3').length },
+      factory3rd: { occupancy: allVehicles.filter(v => v.yardId === 'yard4').length },
+      p1: { occupancy: allVehicles.filter(v => v.yardId === 'yardP1').length },
+      p2: { occupancy: allVehicles.filter(v => v.yardId === 'yardP2').length },
+      p6: { occupancy: allVehicles.filter(v => v.yardId === 'yardP6').length },
+      cobertura: { occupancy: allVehicles.filter(v => v.yardId === 'yardCob').length }
+    },
+    recentFlow: recentMoves
   };
 
   const prompt = `
     Você é um consultor especialista em logística de pátios automotivos de luxo (Porsche).
-    Analise a estrutura atual dos pátios e sugira otimizações estratégicas.
+    Sua missão é otimizar a alocação de veículos e reduzir gargalos operacionais.
     
-    Contexto dos Pátios:
+    Dados Consolidados do Pátio:
     ${JSON.stringify(yardContext, null, 2)}
     
-    Veículos Atuais no Pátio: ${allVehicles.length}
+    Principais Desafios Identificados:
+    1. Tempo Médio de Permanência: ${yardContext.statistics.averageStayHours} horas.
+    2. Veículos parados há mais de 48h: ${yardContext.statistics.criticalStayCount}.
+    3. Status de Lavagem: ${JSON.stringify(washStatusCounts)}.
     
-    Considere:
-    1. Fluxo de trabalho (Workshop -> Lavagem -> Entrega).
-    2. Alocação de vagas por tipo de serviço (PDI, Revisão, Blindagem, etc).
-    3. Redução de gargalos e tempo de movimentação.
-    4. Priorização de vagas (ex: P6 é alta prioridade).
+    Diretrizes para Análise:
+    - Identifique se há acúmulo de veículos aguardando lavagem e sugira realocação para pátios de pulmão (buffer) como o Subsolo ou 3º Andar.
+    - Analise se o P6 (Alta Prioridade) está sendo usado eficientemente para veículos com baixa permanência.
+    - Sugira estratégias para "destravar" veículos com alta permanência (>48h).
+    - Recomende o fluxo ideal: Entrada -> Vistoria -> Lavagem -> Pátio de Entrega (P6/P2).
     
-    Forneça 3 a 5 sugestões concretas e acionáveis em formato Markdown. 
-    Seja profissional, técnico e focado em eficiência operacional.
+    Forneça um relatório estratégico em Markdown contendo:
+    - **Diagnóstico do Fluxo Atual**
+    - **Ações Imediatas (Low Hanging Fruits)**
+    - **Sugestões de Otimização de Espaço**
+    - **KPIs para Monitorar**
+    
+    Seja incisivo, use terminologia logística e foque em resultados práticos para uma operação Porsche.
   `;
 
   try {

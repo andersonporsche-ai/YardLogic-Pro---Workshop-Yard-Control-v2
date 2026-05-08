@@ -1,6 +1,25 @@
 
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { Reorder, motion, AnimatePresence } from 'motion/react';
+import {
+  DndContext, 
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+  DragOverlay,
+  defaultDropAnimationSideEffects
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import Markdown from 'react-markdown';
 import { Vehicle, ActivityLog, ConsultantName } from '../types';
 import { YARD_LAYOUT, CONSULTANTS, ALERT_THRESHOLDS, WASH_STATUS_OPTIONS } from '../constants';
@@ -16,6 +35,7 @@ interface YardViewProps {
   onUpdateVehicle: (vehicle: Vehicle) => void;
   onUpdateLog: (logId: string, updates: Partial<ActivityLog>) => void;
   onRemoveVehicle: (id: string, exitTime?: string, idleReason?: string, idleActions?: string) => void;
+  onMoveToYard?: (vehicleId: string, yardId: string) => void;
   isDarkMode?: boolean;
   selectedSlotIndex?: number | null;
   now: Date;
@@ -58,6 +78,53 @@ interface YardAlert {
 
 type RowItem = YardSector | SectorGroup;
 
+const SortableItem = ({ id, sector, isDarkMode }: { id: string; sector: YardSector; isDarkMode: boolean }) => {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging
+  } = useSortable({ id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 200 : 1,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      className={`p-4 rounded-2xl border-2 flex items-center justify-between cursor-grab active:cursor-grabbing transition-all ${
+        isDragging ? 'opacity-30 scale-95' : 'opacity-100'
+      } ${
+        isDarkMode 
+          ? 'bg-white/5 border-white/5 hover:border-blue-500/30 shadow-xl' 
+          : 'bg-slate-50 border-slate-100 hover:border-blue-500/30 shadow-md'
+      }`}
+    >
+      <div className="flex items-center gap-4">
+        <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-black text-xs ${isDarkMode ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-50 text-blue-600'}`}>
+          {sector.row}
+        </div>
+        <div className="flex flex-col">
+          <span className={`text-xs font-black uppercase tracking-tight flex items-center gap-2 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+            {sector.icon && <i className={`fas ${sector.icon} text-[10px] text-blue-500/50`}></i>}
+            {sector.label}
+          </span>
+          <span className="text-[9px] font-bold text-slate-500 uppercase">{sector.slots} Vagas</span>
+        </div>
+      </div>
+      <i className="fas fa-grip-lines text-slate-500/40"></i>
+    </div>
+  );
+};
+
 const YardView: React.FC<YardViewProps> = ({ 
   vehicles, 
   activityLogs,
@@ -71,11 +138,46 @@ const YardView: React.FC<YardViewProps> = ({
   layout,
   layoutId,
   maxSlots,
+  onMoveToYard,
   addToast
 }) => {
   const [zoomScale, setZoomScale] = useState<number>(1.0);
   const [currentLayout, setCurrentLayout] = useState(layout);
+  const [isEditMode, setIsEditMode] = useState(false);
   const [isReorderModalOpen, setIsReorderModalOpen] = useState(false);
+  
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  const handleLayoutDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+
+    if (over && active.id !== over.id) {
+      const oldIndex = currentLayout.findIndex((item) => item.row === active.id);
+      const newIndex = currentLayout.findIndex((item) => item.row === over.id);
+
+      const newLayout = arrayMove(currentLayout, oldIndex, newIndex);
+      handleReorder(newLayout);
+    }
+    
+    // Clear active drag state if any
+    setActiveDragId(null);
+  };
+
+  const [activeDragId, setActiveDragId] = useState<string | null>(null);
+
+  const handleLayoutDragStart = (event: { active: { id: string } }) => {
+    setActiveDragId(event.active.id);
+  };
+  
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedConsultant, setSelectedConsultant] = useState<ConsultantName | 'All'>('All');
   const [selectedWashStatus, setSelectedWashStatus] = useState<string | 'All'>('All');
@@ -96,6 +198,99 @@ const YardView: React.FC<YardViewProps> = ({
   const [safeRoutes, setSafeRoutes] = useState<{ from: string; to: string; route: string }[]>([]);
   const [isGeneratingSafety, setIsGeneratingSafety] = useState(false);
   const [highlightedSlot, setHighlightedSlot] = useState<number | null>(null);
+  const [isDraggingVehicleId, setIsDraggingVehicleId] = useState<string | null>(null);
+  const [dragHoverSlot, setDragHoverSlot] = useState<number | null>(null);
+  
+  const handleDragStart = (id: string) => {
+    setIsDraggingVehicleId(id);
+  };
+
+  const handleDragUpdate = (_event: unknown, info: { point: { x: number; y: number } }) => {
+    if (!isDraggingVehicleId) return;
+
+    const elements = document.elementsFromPoint(info.point.x, info.point.y);
+    
+    // Check for tabs/yards
+    const tabElement = elements.find(el => el.id && el.id.startsWith('tab-yard'));
+    if (tabElement) {
+      const yardId = tabElement.id.replace('tab-', '');
+      if (yardId !== layoutId) {
+        setDragHoverSlot(null);
+        // Visual feedback for tab? We could change its color, but for now we just clear the slot hover
+        return;
+      }
+    }
+
+    const slotElement = elements.find(el => 
+      el.id && 
+      el.id.startsWith('slot-')
+    );
+
+    if (slotElement) {
+      const idx = parseInt(slotElement.id.replace('slot-', ''), 10);
+      setDragHoverSlot(idx);
+    } else {
+      setDragHoverSlot(null);
+    }
+  };
+
+  const handleDragEnd = (_event: unknown, info: { point: { x: number; y: number } }, vehicle: Vehicle) => {
+    setIsDraggingVehicleId(null);
+    setDragHoverSlot(null);
+    
+    // Encontrar o elemento no ponto de liberação através das coordenadas da tela
+    const elements = document.elementsFromPoint(info.point.x, info.point.y);
+    
+    // Check for drop on other yard tab
+    const tabElement = elements.find(el => el.id && el.id.startsWith('tab-yard'));
+    if (tabElement && onMoveToYard) {
+      const targetYardId = tabElement.id.replace('tab-', '');
+      if (targetYardId !== layoutId) {
+        onMoveToYard(vehicle.id, targetYardId);
+        return;
+      }
+    }
+
+    const slotElement = elements.find(el => 
+      el.id && 
+      el.id.startsWith('slot-') && 
+      el.id !== `slot-${vehicle.slotIndex}`
+    );
+    
+    if (slotElement) {
+      const newSlotIdx = parseInt(slotElement.id.replace('slot-', ''), 10);
+      const targetVehicle = getVehicleAtSlot(newSlotIdx);
+      
+      if (newSlotIdx >= 0 && newSlotIdx < maxSlots) {
+        if (!targetVehicle) {
+          // Vaga vazia - move normal
+          onUpdateVehicle({ ...vehicle, slotIndex: newSlotIdx });
+          
+          if (addToast) {
+            addToast({
+              title: 'Veículo Realocado',
+              message: `O veículo ${vehicle.plate} foi movido para a vaga ${newSlotIdx + 1}.`,
+              type: 'success'
+            });
+          }
+        } else {
+          // Vaga ocupada - permuta
+          onUpdateVehicle({ ...vehicle, slotIndex: newSlotIdx });
+          onUpdateVehicle({ ...targetVehicle, slotIndex: vehicle.slotIndex });
+          
+          if (addToast) {
+            addToast({
+              title: 'Vagas Permutadas',
+              message: `Os veículos ${vehicle.plate} e ${targetVehicle.plate} trocaram de posição.`,
+              type: 'success'
+            });
+          }
+        }
+      }
+    }
+  };
+
+  const notifiedPushSlots = useRef<Set<string>>(new Set());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const yardContentRef = useRef<HTMLDivElement>(null);
 
@@ -536,12 +731,29 @@ const YardView: React.FC<YardViewProps> = ({
           data: s
         });
       }
+
+      // Browser Push Notification for > 48h
+      if (s.info.hoursVacant >= 48 && !notifiedPushSlots.current.has(`${layoutId}-${s.index}`)) {
+        if ('Notification' in window && Notification.permission === 'granted') {
+          new Notification('Atenção: Vaga Ociosa', {
+            body: `A vaga ${s.index + 1} no ${yardName} está livre há ${s.info.hoursVacant}h.`,
+            tag: `idle-${layoutId}-${s.index}`,
+            icon: 'https://cdn-icons-png.flaticon.com/512/1165/1165936.png'
+          });
+          notifiedPushSlots.current.add(`${layoutId}-${s.index}`);
+        }
+      }
+    });
+
+    // Reset push notification tracking for occupied slots
+    vehicles.forEach(v => {
+      notifiedPushSlots.current.delete(`${layoutId}-${v.slotIndex}`);
     });
 
     if (newAlerts.length > 0) {
       setAlertQueue(prev => [...prev, ...newAlerts]);
     }
-  }, [vehicles, activityLogs, now, acknowledgedAlertIds, alertQueue, getVacantInfo, getVehicleAtSlot, maxSlots]);
+  }, [vehicles, activityLogs, now, acknowledgedAlertIds, alertQueue, getVacantInfo, getVehicleAtSlot, maxSlots, layoutId, yardName]);
 
   const handleDismissAlert = (id: string) => {
     setAcknowledgedAlertIds(prev => {
@@ -934,6 +1146,15 @@ const YardView: React.FC<YardViewProps> = ({
           >
             <i className="fas fa-grip-vertical text-[10px]"></i>
             <span className="text-[9px] font-black uppercase tracking-widest">Layout</span>
+          </button>
+          <div className="w-px h-8 bg-slate-500/20"></div>
+          <button 
+            onClick={() => setIsEditMode(!isEditMode)}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border transition-all hover:scale-105 active:scale-95 ${isEditMode ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg' : 'bg-white/5 border-slate-500/20 text-slate-500 hover:text-indigo-500 hover:border-indigo-500/50'}`}
+            title="Modo de Edição de Layout"
+          >
+            <i className={`fas ${isEditMode ? 'fa-check' : 'fa-pen-ruler'} text-[10px]`}></i>
+            <span className="text-[9px] font-black uppercase tracking-widest">{isEditMode ? 'Salvar Layout' : 'Editar Layout'}</span>
           </button>
           <div className="w-px h-8 bg-slate-500/20"></div>
           <button 
@@ -1470,16 +1691,102 @@ const YardView: React.FC<YardViewProps> = ({
         )}
       </AnimatePresence>
 
-        <div 
-          ref={yardContentRef}
-          className={`flex flex-col min-w-max transition-transform duration-500 ease-out ${isP6Layout ? 'gap-10' : 'gap-20'}`}
-          style={{ 
-            transform: `scale(${zoomScale})`, 
-            transformOrigin: 'top left',
-            paddingBottom: '200px',
-            paddingRight: '200px'
-          }}
-        >
+        {isEditMode ? (
+          <div className="flex-1 flex flex-col items-center justify-center p-8 animate-in fade-in zoom-in-95 duration-500">
+            <div className={`w-full max-w-4xl p-12 rounded-[3rem] border-2 border-dashed ${isDarkMode ? 'bg-indigo-500/5 border-indigo-500/20' : 'bg-indigo-50 border-indigo-200'}`}>
+              <div className="flex items-center justify-between mb-8">
+                <div className="flex items-center gap-4">
+                  <div className="w-14 h-14 rounded-2xl bg-indigo-600 flex items-center justify-center text-white shadow-xl shadow-indigo-600/20">
+                    <i className="fas fa-layer-group text-2xl"></i>
+                  </div>
+                  <div>
+                    <h2 className={`text-3xl font-black uppercase tracking-tighter ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Organizador de Pátio</h2>
+                    <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mt-1">Arraste os blocos para definir a ordem dos setores</p>
+                  </div>
+                </div>
+                <div className="flex gap-4">
+                   <button 
+                    onClick={resetLayout}
+                    className="px-6 py-3 rounded-xl border-2 border-red-500/20 text-red-500 text-[10px] font-black uppercase tracking-widest hover:bg-red-500/10 transition-all"
+                  >
+                    Resetar Padrão
+                  </button>
+                  <button 
+                    onClick={() => setIsEditMode(false)}
+                    className="px-8 py-3 rounded-xl bg-indigo-600 text-white text-[10px] font-black uppercase tracking-widest shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 transition-all"
+                  >
+                    Finalizar Edição
+                  </button>
+                </div>
+              </div>
+
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragStart={handleLayoutDragStart}
+                onDragEnd={handleLayoutDragEnd}
+              >
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <SortableContext
+                    items={currentLayout.map(item => item.row)}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    {currentLayout.map((item) => (
+                      <SortableItem key={item.row} id={item.row} sector={item as YardSector} isDarkMode={isDarkMode} />
+                    ))}
+                  </SortableContext>
+                </div>
+                
+                <DragOverlay dropAnimation={{
+                  sideEffects: defaultDropAnimationSideEffects({
+                    styles: {
+                      active: {
+                        opacity: '0.5',
+                      },
+                    },
+                  }),
+                }}>
+                  {activeDragId ? (
+                    <div className={`p-4 rounded-2xl border-2 flex items-center justify-between bg-indigo-600 border-indigo-400 text-white shadow-2xl scale-105 opacity-90`}>
+                      <div className="flex items-center gap-4">
+                        <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center font-black text-xs text-white">
+                          {activeDragId}
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-xs font-black uppercase tracking-tight">
+                            {currentLayout.find(i => i.row === activeDragId)?.label}
+                          </span>
+                          <span className="text-[9px] font-bold text-white/60 uppercase">
+                            {currentLayout.find(i => i.row === activeDragId)?.slots} Vagas
+                          </span>
+                        </div>
+                      </div>
+                      <i className="fas fa-grip-lines opacity-40"></i>
+                    </div>
+                  ) : null}
+                </DragOverlay>
+              </DndContext>
+
+              <div className="mt-12 p-6 rounded-2xl bg-slate-500/5 border border-slate-500/10 flex items-center gap-4">
+                <i className="fas fa-info-circle text-indigo-500"></i>
+                <p className="text-[10px] font-medium text-slate-500 leading-relaxed uppercase tracking-wide">
+                  A ordem definida aqui afeta a disposição vertical dos setores na visão geral e no mini-mapa. 
+                  As alterações são salvas automaticamente no seu navegador.
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div 
+            ref={yardContentRef}
+            className={`flex flex-col min-w-max transition-transform duration-500 ease-out ${isP6Layout ? 'gap-10' : 'gap-20'}`}
+            style={{ 
+              transform: `scale(${zoomScale})`, 
+              transformOrigin: 'top left',
+              paddingBottom: '200px',
+              paddingRight: '200px'
+            }}
+          >
           {groupedSectorsByRow.map((rowItems, rowIndex) => (
             <div key={rowIndex} className={`flex ${isP6Layout ? 'gap-6' : 'gap-12'}`}>
               {rowItems.map((item) => {
@@ -1597,21 +1904,31 @@ const YardView: React.FC<YardViewProps> = ({
                           key={`${idx}-${v ? v.id : 'empty'}`}
                           id={`slot-${idx}`}
                           onClick={() => onSelectSlot(idx)}
+                          drag={!!v}
+                          dragSnapToOrigin={true}
+                          onDragStart={() => v && handleDragStart(v.id)}
+                          onDrag={(e, info) => v && handleDragUpdate(e, info)}
+                          onDragEnd={(e, info) => v && handleDragEnd(e, info, v)}
                           initial={v ? { scale: 0.9, opacity: 0 } : { opacity: 0, y: 10 }}
-                          animate={{ scale: 1, opacity: 1, y: 0 }}
+                          animate={{ 
+                            scale: isDraggingVehicleId === v?.id ? 1.05 : 1, 
+                            opacity: 1, 
+                            y: 0,
+                            zIndex: isDraggingVehicleId === v?.id ? 200 : (dragHoverSlot === idx ? 50 : 1)
+                          }}
                           transition={{ 
                             type: "spring", 
                             stiffness: 400, 
                             damping: 30,
                             opacity: { duration: 0.3 }
                           }}
-                          whileHover={{ scale: 1.02, transition: { duration: 0.2 } }}
+                          whileHover={{ scale: isDraggingVehicleId ? 1 : 1.02, transition: { duration: 0.2 } }}
                           whileTap={{ scale: 0.98 }}
                           className={`relative p-5 pl-10 rounded-[2.8rem] border-2 transition-all duration-500 ease-in-out cursor-pointer group flex flex-col gap-3 overflow-hidden ${
                             v 
                               ? `${isDarkMode ? 'bg-[#161922] border-white/5 shadow-2xl' : 'bg-white border-slate-100 shadow-xl hover:shadow-2xl'}`
                               : `${staleVacantClass} border-dashed hover:bg-blue-500/5 ${emptyAnim}`
-                          } ${isSelected ? 'animate-selected-fluid' : ''} ${info?.isAttentionRequired ? 'animate-critical-pulse ring-2 ring-red-500/30' : ''} ${info?.hours && info.hours >= 8 ? 'ring-4 ring-red-500 ring-offset-4 z-50 animate-critical-pulse' : ''} ${v?.washStatus === 'Veículo Pronto' ? 'animate-ready-pulse' : ''} ${opacityClass} ${pulseHighlight} ${highlightedSlot === idx ? 'animate-selection-highlight' : ''} ${riskySlots.includes(idx) ? 'ring-4 ring-orange-500 ring-offset-4 z-50 animate-pulse' : ''}`}
+                          } ${isSelected ? 'animate-selected-fluid' : ''} ${info?.isAttentionRequired ? 'animate-critical-pulse ring-2 ring-red-500/30' : ''} ${info?.hours && info.hours >= 8 ? 'ring-4 ring-red-500 ring-offset-4 z-50 animate-critical-pulse' : ''} ${v?.washStatus === 'Veículo Pronto' ? 'animate-ready-pulse' : ''} ${opacityClass} ${pulseHighlight} ${highlightedSlot === idx ? 'animate-selection-highlight' : ''} ${riskySlots.includes(idx) ? 'ring-4 ring-orange-500 ring-offset-4 z-50 animate-pulse' : ''} ${isDraggingVehicleId === v?.id ? 'pointer-events-none opacity-80' : ''} ${dragHoverSlot === idx ? 'ring-4 ring-blue-500 border-blue-500 shadow-[0_0_20px_rgba(59,130,246,0.5)] scale-[1.02] z-50' : ''}`}
                         >
                           {(info?.isAttentionRequired || riskySlots.includes(idx)) && (
                             <div className={`absolute top-4 right-4 z-20 w-8 h-8 rounded-full flex items-center justify-center text-white shadow-lg animate-bounce ${info?.hours && info.hours >= 8 ? 'bg-red-600 scale-110 shadow-red-500/50' : 'bg-orange-500'}`}>
@@ -1840,6 +2157,7 @@ const YardView: React.FC<YardViewProps> = ({
             </div>
           ))}
         </div>
+      )}
       </div>
     </div>
   );

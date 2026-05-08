@@ -2,25 +2,27 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Vehicle, ConsultantName, WashStatus, DeliveryStatus } from '../types';
-import { CONSULTANTS, PRISMA_COLORS, PORSCHE_MODELS, WORKSHOP_SERVICES, WASH_STATUS_OPTIONS, DELIVERY_STATUS_OPTIONS, getSlotDisplayName, ALERT_THRESHOLDS } from '../constants';
+import { CONSULTANTS, PRISMA_COLORS, PORSCHE_MODELS, WORKSHOP_SERVICES, WASH_STATUS_OPTIONS, DELIVERY_STATUS_OPTIONS, getSlotDisplayName, ALERT_THRESHOLDS, DEFAULT_YARD_OPTIONS } from '../constants';
 import { differenceInMinutes } from 'date-fns';
-import { extractLicensePlate } from '../services/geminiService';
+import { extractLicensePlate, correctPlateWithAI } from '../services/geminiService';
 import { getSmartRecommendation } from '../services/yardOptimization';
 import PrismaScanner from './PrismaScanner';
 
 interface VehicleFormProps {
   slotIndex: number;
+  initialService?: string;
   existingVehicle?: Vehicle;
   allActiveVehicles?: Vehicle[];
   onSave: (vehicle: Vehicle) => void;
   onRemove?: (id: string, exitTime?: string, idleReason?: string, idleActions?: string) => void;
   onClose: () => void;
   isDarkMode?: boolean;
+  addToast?: (toast: { title: string; message: string; type: 'info' | 'warning' | 'error' | 'success' }) => void;
 }
 
 const DRAFT_STORAGE_KEY = 'vehicle_form_draft';
 
-const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, allActiveVehicles, onSave, onRemove, onClose, isDarkMode = false }) => {
+const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, initialService, existingVehicle, allActiveVehicles, onSave, onRemove, onClose, isDarkMode = false, addToast }) => {
   const [showConfirmExit, setShowConfirmExit] = useState(false);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [isTorchOn, setIsTorchOn] = useState(false);
@@ -32,6 +34,7 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
   const [isFramingStable, setIsFramingStable] = useState(false);
   const [isPlateCentered, setIsPlateCentered] = useState(false);
   const [isFocusing, setIsFocusing] = useState(false);
+  const [showColorPicker, setShowColorPicker] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -68,6 +71,17 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
     slotIndex: slotIndex,
     prisma: { number: 0, color: PRISMA_COLORS[0].hex }
   });
+
+  // Update formData if initialService is provided for a new vehicle
+  useEffect(() => {
+    if (initialService && !existingVehicle) {
+      setFormData(prev => ({
+        ...prev,
+        service: initialService,
+        washStatus: (initialService === 'Veículos Seminovos' || initialService === 'PDI') ? initialService : prev.washStatus
+      }));
+    }
+  }, [initialService, existingVehicle]);
 
   const [ocrSuccess, setOcrSuccess] = useState(false);
   const [plateScanResult, setPlateScanResult] = useState<'none' | 'success' | 'error'>('none');
@@ -326,82 +340,26 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
       const extractedPlate = await extractLicensePlate(base64Data);
 
       if (extractedPlate) {
-        const hasHyphen = extractedPlate.includes('-');
-        const cleanPlate = extractedPlate.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+        // AI Driven Correction: 
+        // If the plate doesn't match common formats, ask Gemini to correct it based on transit rules
+        let finalPlate = extractedPlate;
         
-        let finalPlate = cleanPlate;
-
-        // Logical correction based on pattern detection
-        if (cleanPlate.length === 7) {
-          const chars = cleanPlate.split('');
-          const isMercosulAB = /^[A-Z]{2}[0-9]{3}[A-Z]{2}$/.test(cleanPlate);
-          const startsWith3Letters = /^[A-Z]{3}/.test(cleanPlate);
-
-          if (startsWith3Letters) {
-            // BRAZILIAN PATTERNS (Mercosul: ABC1D23 or Old: ABC1234)
-            const isOldPattern = hasHyphen || /^[A-Z]{3}[0-9]{4}$/.test(cleanPlate);
-
-            // Both patterns MUST have a number at index 3
-            if (/[A-Z]/.test(chars[3])) {
-              if (chars[3] === 'I') chars[3] = '1';
-              else if (chars[3] === 'O') chars[3] = '0';
-              else if (chars[3] === 'S') chars[3] = '5';
-              else if (chars[3] === 'G') chars[3] = '6';
-              else if (chars[3] === 'B') chars[3] = '8';
-            }
-
-            if (isOldPattern) {
-              // OLD PATTERN: Index 4, 5, 6 MUST be numbers
-              [4, 5, 6].forEach(idx => {
-                if (/[A-Z]/.test(chars[idx])) {
-                  if (chars[idx] === 'I') chars[idx] = '1';
-                  else if (chars[idx] === 'O') chars[idx] = '0';
-                  else if (chars[idx] === 'S') chars[idx] = '5';
-                }
-              });
-            } else {
-              // MERCOSUL PATTERN: Index 4 MUST be a letter
-              if (/[0-9]/.test(chars[4])) {
-                if (chars[4] === '0') chars[4] = 'O';
-                else if (chars[4] === '1') chars[4] = 'I';
-                else if (chars[4] === '5') chars[4] = 'S';
-              }
-              // Index 5, 6 MUST be numbers
-              [5, 6].forEach(idx => {
-                if (/[A-Z]/.test(chars[idx])) {
-                  if (chars[idx] === 'I') chars[idx] = '1';
-                  else if (chars[idx] === 'O') chars[idx] = '0';
-                  else if (chars[idx] === 'S') chars[idx] = '5';
-                }
-              });
-            }
-          } else if (isMercosulAB) {
-            // ARGENTINA/OTHER MERCOSUL (AB123CD)
-            // Index 2, 3, 4 MUST be numbers
-            [2, 3, 4].forEach(idx => {
-              if (/[A-Z]/.test(chars[idx])) {
-                if (chars[idx] === 'I') chars[idx] = '1';
-                else if (chars[idx] === 'O') chars[idx] = '0';
-                else if (chars[idx] === 'S') chars[idx] = '5';
-              }
-            });
-            // Index 5, 6 MUST be letters
-            [5, 6].forEach(idx => {
-              if (/[0-9]/.test(chars[idx])) {
-                if (chars[idx] === '0') chars[idx] = 'O';
-                else if (chars[idx] === '1') chars[idx] = 'I';
-                else if (chars[idx] === '5') chars[idx] = 'S';
-              }
-            });
-          }
-          finalPlate = chars.join('');
+        const cleanExtracted = extractedPlate.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+        const isMercosulBrazil = /^[A-Z]{3}[0-9][A-Z][0-9]{2}$/.test(cleanExtracted);
+        const isMercosulArg = /^[A-Z]{2}[0-9]{3}[A-Z]{2}$/.test(cleanExtracted);
+        const isOldFormat = /^[A-Z]{3}[0-9]{4}$/.test(cleanExtracted);
+        
+        if (!isMercosulBrazil && !isMercosulArg && !isOldFormat) {
+          // If patterns don't match, use AI specifically to correct it
+          const corrected = await correctPlateWithAI(extractedPlate);
+          if (corrected) finalPlate = corrected;
         }
 
         const nextData = { ...formData, plate: finalPlate };
         setFormData(nextData);
         
         // Trigger validation with the new plate
-        const isValid = validateField('plate', cleanPlate, nextData);
+        const isValid = validateField('plate', finalPlate, nextData);
         
         if (isValid) {
           setOcrSuccess(true);
@@ -467,9 +425,23 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
         else {
           const duplicate = allActiveVehicles?.find(v => 
             v.prisma.number === value && 
+            v.prisma.color === formData.prisma?.color &&
             v.id !== data.id
           );
-          if (duplicate) error = `Este Prisma (#${value}) já está em uso por outro veículo no sistema`;
+          if (duplicate) {
+            const yardName = DEFAULT_YARD_OPTIONS.find(o => o.id === duplicate.yardId)?.label || duplicate.yardId;
+            const colorName = PRISMA_COLORS.find(c => c.hex === duplicate.prisma.color)?.name || 'Cor';
+            error = `CONFLITO: Prisma ${colorName} #${value} já está no ${yardName} (Vaga ${duplicate.slotIndex + 1})`;
+            
+            // Trigger a silent but visible alert via toast if available
+            if (addToast) {
+              addToast({
+                title: 'Conflito de Prisma',
+                message: `O Prisma ${colorName} #${value} já pertence ao veículo na vaga ${duplicate.slotIndex + 1} (${yardName}).`,
+                type: 'error'
+              });
+            }
+          }
         }
         break;
       case 'service':
@@ -1040,13 +1012,14 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
                       <i className="fas fa-qrcode"></i> Escanear Prisma
                     </button>
                   </div>
-                  <div className="relative group">
-                    <i className="fas fa-tag absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 text-sm transition-colors group-focus-within:text-blue-500"></i>
+                  <div className={`relative group ${errors.prismaNumber ? 'animate-shake' : ''}`}>
+                    <i className={`fas fa-tag absolute left-5 top-1/2 -translate-y-1/2 text-sm transition-colors ${errors.prismaNumber ? 'text-red-500' : 'text-slate-400 group-focus-within:text-blue-500'}`}></i>
                     <input 
                       type="number" 
                       placeholder="00" 
-                      className={`w-full h-14 pl-12 pr-5 rounded-2xl border-2 font-black transition-all outline-none focus:ring-4 focus:ring-blue-500/10 ${errors.prismaNumber ? 'border-red-500 focus:border-red-500 focus:ring-red-500/10' : (isDarkMode ? 'bg-white/5 border-white/5 text-white focus:border-blue-500/50' : 'bg-white border-slate-200 text-slate-800 focus:border-blue-500 shadow-sm')}`} 
+                      className={`w-full h-14 pl-12 pr-5 rounded-2xl border-2 font-black transition-all outline-none focus:ring-4 ${errors.prismaNumber ? 'border-red-500 bg-red-500/5 focus:ring-red-500/20 text-red-600' : (isDarkMode ? 'bg-white/5 border-white/5 text-white focus:border-blue-500/50 focus:ring-blue-500/10' : 'bg-white border-slate-200 text-slate-800 focus:border-blue-500 shadow-sm focus:ring-blue-500/10')}`} 
                       value={formData.prisma?.number || ''} 
+                      onFocus={(e) => e.target.select()} 
                       onChange={e => {
                         const val = parseInt(e.target.value) || 0;
                         const nextData = { ...formData, prisma: { color: formData.prisma?.color || PRISMA_COLORS[0].hex, number: val } };
@@ -1061,23 +1034,73 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, existingVehicle, a
                 </div>
                 <div className="space-y-4">
                   <label className="block text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Cor do Prisma</label>
-                  <div className={`flex items-center h-14 gap-2 px-3 rounded-2xl border-2 transition-all ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}>
-                    {PRISMA_COLORS.map(c => (
-                      <button 
-                        key={c.hex} 
-                        type="button" 
-                        title={c.name}
-                        onClick={() => setFormData({ ...formData, prisma: { color: c.hex, number: formData.prisma?.number || 0 } })} 
-                        className={`w-8 h-8 rounded-full border-2 shrink-0 transition-all hover:scale-110 active:scale-90 relative ${formData.prisma?.color === c.hex ? 'border-white ring-2 ring-blue-500 shadow-lg z-10' : 'border-transparent opacity-60 hover:opacity-100'}`} 
-                        style={{ backgroundColor: c.hex }}
-                      >
-                        {formData.prisma?.color === c.hex && (
-                          <div className="absolute inset-0 flex items-center justify-center">
-                            <i className={`fas fa-check text-[10px] ${getContrastColor(c.hex).includes('slate-950') ? 'text-slate-950' : 'text-white'}`}></i>
-                          </div>
-                        )}
-                      </button>
-                    ))}
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setShowColorPicker(!showColorPicker)}
+                      className={`w-full h-14 px-5 rounded-2xl border-2 flex items-center justify-between transition-all outline-none focus:ring-4 focus:ring-blue-500/10 ${isDarkMode ? 'bg-white/5 border-white/5 text-white' : 'bg-white border-slate-100 text-slate-800 shadow-sm'}`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-6 h-6 rounded-full shadow-inner border border-white/20" style={{ backgroundColor: prismaColor }}></div>
+                        <span className="font-bold text-sm tracking-tight">{PRISMA_COLORS.find(c => c.hex === prismaColor)?.name || 'Selecione a Cor'}</span>
+                      </div>
+                      <i className={`fas fa-chevron-down text-[10px] transition-transform duration-300 ${showColorPicker ? 'rotate-180' : ''}`}></i>
+                    </button>
+                    
+                    <AnimatePresence>
+                      {showColorPicker && (
+                        <>
+                          {/* Backdrop to close the picker */}
+                          <div 
+                            className="fixed inset-0 z-40" 
+                            onClick={() => setShowColorPicker(false)}
+                          />
+                          <motion.div
+                            initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                            className={`absolute left-0 right-0 mt-3 p-4 rounded-[1.5rem] border shadow-2xl z-50 ${isDarkMode ? 'bg-[#1A1D26] border-white/10 shadow-black/50' : 'bg-white border-slate-100 shadow-slate-200/50'}`}
+                          >
+                            <div className="grid grid-cols-4 gap-2">
+                              {PRISMA_COLORS.map(c => (
+                                <button
+                                  key={c.hex}
+                                  type="button"
+                                  onClick={() => {
+                                    const nextData = { ...formData, prisma: { color: c.hex, number: formData.prisma?.number || 0 } };
+                                    setFormData(nextData);
+                                    validateField('prismaNumber', nextData.prisma.number, nextData);
+                                    setShowColorPicker(false);
+                                  }}
+                                  className={`flex flex-col items-center gap-2 p-2 rounded-xl transition-all relative ${formData.prisma?.color === c.hex ? (isDarkMode ? 'bg-white/10 border border-white/10' : 'bg-slate-50 border border-slate-100') : 'hover:bg-slate-500/5 border border-transparent'}`}
+                                >
+                                  <div 
+                                    className={`w-10 h-10 rounded-full shadow-lg relative flex items-center justify-center transition-transform hover:scale-110 active:scale-95 group`} 
+                                    style={{ backgroundColor: c.hex }}
+                                  >
+                                    <div className="absolute inset-0 bg-white/20 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                                    {formData.prisma?.color === c.hex && (
+                                      <motion.i 
+                                        initial={{ scale: 0 }}
+                                        animate={{ scale: 1 }}
+                                        className={`fas fa-check text-xs ${getContrastColor(c.hex)}`}
+                                      />
+                                    )}
+                                  </div>
+                                  <span className={`text-[7px] font-black uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>{c.name}</span>
+                                  {formData.prisma?.color === c.hex && (
+                                    <motion.div 
+                                      layoutId="activeColor"
+                                      className="absolute -top-1 -right-1 w-3 h-3 bg-blue-500 rounded-full border-2 border-white flex items-center justify-center"
+                                    />
+                                  )}
+                                </button>
+                              ))}
+                            </div>
+                          </motion.div>
+                        </>
+                      )}
+                    </AnimatePresence>
                   </div>
                 </div>
               </div>

@@ -114,6 +114,40 @@ export const getLayoutAndFlowOptimization = async (vehicles: Vehicle[], logs: Ac
   }
 };
 
+export const getStrategicOptimizationPro = async (vehicles: Vehicle[], logs: ActivityLog[]) => {
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  
+  const prompt = `
+    Como um Consultor Sênior de Logística Automotiva Porsche, analise os dados abaixo para fornecer Sugestões de Otimização Estratégica.
+
+    DADOS ATUAIS (VEÍCULOS):
+    ${JSON.stringify(vehicles.map(v => ({ plate: v.plate, model: v.model, status: v.washStatus, slot: v.slotIndex, service: v.serviceType, entry: v.entryTime })))}
+
+    HISTÓRICO DE ATIVIDADES (LOGS):
+    ${JSON.stringify(logs.slice(0, 50))}
+
+    SUA MISSÃO:
+    Forneça recomendações detalhadas e acionáveis sobre:
+    1. Realocação de Veículos: Identifique veículos que estão em locais ineficientes (ex: prontos mas ocupando vagas de oficina).
+    2. Otimização de Fluxo: Sugira melhorias no trajeto dos veículos entre lavagem, oficina e pátio de espera.
+    3. Sugestões de Layout: Recomende ajustes na setorização das vagas para maximizar o turnover.
+
+    FORMATO DE RESPOSTA:
+    Use Markdown. Seja direto, técnico e focado em alta performance. Português do Brasil.
+  `;
+
+  try {
+    const response: GenerateContentResponse = await ai.models.generateContent({
+      model: 'gemini-3.1-pro-preview',
+      contents: prompt
+    });
+    return response.text;
+  } catch (error) {
+    console.error("Strategic Optimization Pro Error:", error);
+    return "Erro ao gerar otimização estratégica avançada.";
+  }
+};
+
 export const getSafetyAnalysis = async (vehicles: Vehicle[], layout: { row: string; label: string; slots: number }[], yardName: string, logs: ActivityLog[]) => {
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
   
@@ -234,5 +268,87 @@ export const extractLicensePlate = async (base64Image: string) => {
   } catch (error) {
     console.error("OCR Error:", error);
     return null;
+  }
+};
+
+export const correctPlateWithAI = async (rawPlate: string) => {
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  
+  const prompt = `
+    Como um especialista em sistemas de trânsito do Brasil, corrija esta placa que foi lida via OCR com possíveis erros.
+    
+    PLACA LIDA: "${rawPlate}"
+    
+    REGRAS DE OURO (PADRÕES BRASILEIROS):
+    1. PADRÃO MERCOSUL: 7 caracteres. Formato: AAA1A11 (3 letras, 1 número, 1 LETRA, 2 números).
+       - O 5º caractere é SEMPRE uma LETRA. Erros comuns: '0' -> 'O', '1' -> 'I', '5' -> 'S', '8' -> 'B'.
+    2. PADRÃO CINZA (ANTIGO): 7 ou 8 caracteres. Formato: AAA1111 ou AAA-1111.
+       - Os últimos 4 caracteres são SEMPRE NÚMEROS. Erros comuns: 'I' -> '1', 'O' -> '0', 'S' -> '5', 'G' -> '6'.
+    
+    Sua tarefa é analisar a "PLACA LIDA" e retornar apenas a placa corrigida no formato mais provável.
+    Se a placa já estiver correta, retorne-a como está.
+    Se for impossível determinar uma placa válida, retone "INVALID".
+    
+    RETORNE APENAS A STRING DA PLACA CORRIGIDA (EX: ABC1D23 ou ABC-1234).
+  `;
+
+  try {
+    const response: GenerateContentResponse = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: prompt,
+      config: {
+        temperature: 0,
+      }
+    });
+
+    const result = response.text?.trim().toUpperCase();
+    if (result && result !== 'INVALID' && result.length >= 7) {
+      return result;
+    }
+    return rawPlate; // Se não conseguiu corrigir, mantém a original para o usuário decidir
+  } catch (error) {
+    console.error("Plate Correction AI Error:", error);
+    return rawPlate;
+  }
+};
+
+export const getYardOptimizationSummary = async (vehicles: Vehicle[], logs: ActivityLog[]) => {
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  
+  const prompt = `
+    Atue como um Especialista em Logística e Otimização de Processos Porsche.
+    Sua tarefa é gerar um RESUMO EXECUTIVO de insights para otimização do pátio.
+    
+    DADOS PARA ANÁLISE:
+    - Veículos Ativos: ${vehicles.length}
+    - Detalhes (simplificados): ${JSON.stringify(vehicles.map(v => ({ model: v.model, status: v.washStatus, entry: v.entryTime, consultant: v.consultant })))}
+    - Logs Recentes: ${JSON.stringify(logs.slice(0, 30).map(l => ({ action: l.action, time: l.timestamp })))}
+    
+    O QUE QUEREMOS:
+    1. DIAGNÓSTICO: Como está a saúde do pátio hoje? (Ocupação e Tempo de Giro)
+    2. GARGALOS: Onde estão os maiores atrasos? (Lavagem, Oficina, Espera?)
+    3. AÇÃO IMEDIATA: Qual a recomendação #1 para agora?
+    4. TENDÊNCIA: Baseado nos logs, o pátio vai lotar ou esvaziar nas próximas horas?
+    
+    REGRAS:
+    - Responda em Português do Brasil.
+    - Seja conciso e direto (tom executivo).
+    - Use Markdown (negritos, listas).
+    - Máximo de 200 palavras.
+  `;
+
+  try {
+    const response: GenerateContentResponse = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: prompt,
+      config: {
+        temperature: 0.7,
+      }
+    });
+
+    return response.text;
+  } catch (error) {
+    console.error("Optimization Summary Error:", error);
+    return "Não foi possível gerar o resumo de otimização no momento.";
   }
 };
