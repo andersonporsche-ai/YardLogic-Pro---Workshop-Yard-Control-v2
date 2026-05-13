@@ -4,8 +4,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Vehicle, ConsultantName, WashStatus, DeliveryStatus } from '../types';
 import { CONSULTANTS, PRISMA_COLORS, PORSCHE_MODELS, WORKSHOP_SERVICES, WASH_STATUS_OPTIONS, DELIVERY_STATUS_OPTIONS, getSlotDisplayName, ALERT_THRESHOLDS, DEFAULT_YARD_OPTIONS } from '../constants';
 import { differenceInMinutes } from 'date-fns';
-import { extractLicensePlate, correctPlateWithAI } from '../services/geminiService';
+import { extractLicensePlate, correctPlateWithAI, getCompletionEstimation } from '../services/geminiService';
 import { getSmartRecommendation } from '../services/yardOptimization';
+import { databaseService } from '../services/database';
 import PrismaScanner from './PrismaScanner';
 
 interface VehicleFormProps {
@@ -34,6 +35,8 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, initialService, ex
   const [isFramingStable, setIsFramingStable] = useState(false);
   const [isPlateCentered, setIsPlateCentered] = useState(false);
   const [isFocusing, setIsFocusing] = useState(false);
+  const [isEstimating, setIsEstimating] = useState(false);
+  const [estimation, setEstimation] = useState<{ estimatedTime: string; completionTime: string | null; reasoning: string } | null>(null);
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -69,6 +72,7 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, initialService, ex
     washStatus: 'Não Solicitado',
     deliveryStatus: 'Aguardando Liberação',
     slotIndex: slotIndex,
+    keyId: '',
     prisma: { number: 0, color: PRISMA_COLORS[0].hex }
   });
 
@@ -130,6 +134,7 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, initialService, ex
       washStatus: 'Não Solicitado',
       deliveryStatus: 'Aguardando Liberação',
       slotIndex: slotIndex,
+      keyId: '',
       prisma: { number: 0, color: PRISMA_COLORS[0].hex }
     });
   };
@@ -478,6 +483,51 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, initialService, ex
     setFormData(nextData);
     validateField('prismaNumber', data.number, nextData);
     setIsPrismaScannerOpen(false);
+  };
+
+  const handleEstimateCompletion = async () => {
+    if (!formData.model || !formData.service) {
+      addToast?.({
+        title: 'Dados Incompletos',
+        message: 'Preencha o modelo e o serviço para estimar a conclusão.',
+        type: 'warning'
+      });
+      return;
+    }
+    
+    setIsEstimating(true);
+    try {
+      // Obter logs para análise de histórico se for veículo existente
+      let vehicleLogs: ActivityLog[] = [];
+      if (existingVehicle) {
+        const allLogs = await databaseService.getLogs();
+        vehicleLogs = allLogs.filter(l => l.vehicleId === existingVehicle.id);
+      }
+      
+      const result = await getCompletionEstimation(formData as Vehicle, vehicleLogs);
+      setEstimation(result);
+      
+      setFormData(prev => ({
+        ...prev,
+        estimatedCompletionTime: result.estimatedTime,
+        estimationReasoning: result.reasoning
+      }));
+      
+      addToast?.({
+        title: 'Estimativa IA Concluída',
+        message: `Conclusão prevista: ${result.estimatedTime}`,
+        type: 'info'
+      });
+    } catch (error) {
+      console.error("Error estimating:", error);
+      addToast?.({
+        title: 'Erro na Estimativa',
+        message: 'Não foi possível processar a estimativa de IA agora.',
+        type: 'error'
+      });
+    } finally {
+      setIsEstimating(false);
+    }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -854,7 +904,7 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, initialService, ex
           {/* SLA Monitor */}
           {existingVehicle && sla && (
             <div className={`px-5 sm:px-10 py-4 sm:py-6 border-b flex flex-col gap-3 ${isDarkMode ? 'bg-white/[0.01] border-white/5' : 'bg-white border-slate-100'}`}>
-              <div className="flex justify-between items-end">
+              <div className="flex justify-between items-start">
                 <div className="flex flex-col gap-1">
                   <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em]">{sla.label}</span>
                   <div className="flex items-center gap-2">
@@ -862,8 +912,43 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, initialService, ex
                     <span className={`text-xl sm:text-2xl font-black tabular-nums tracking-tighter ${sla.colorClass}`}>{sla.formatted}</span>
                   </div>
                 </div>
-                <div className="text-right">
-                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Tempo de Estadia</span>
+                
+                {/* AI ESTIMATION BUTTON / DISPLAY */}
+                <div className="flex flex-col items-end gap-2">
+                  {!estimation && !formData.estimatedCompletionTime ? (
+                    <button 
+                      type="button"
+                      onClick={handleEstimateCompletion}
+                      disabled={isEstimating}
+                      className={`flex items-center gap-2 px-4 py-2 rounded-xl border-2 transition-all active:scale-95 ${isEstimating ? 'bg-blue-500/10 border-blue-500/20 text-blue-500/50' : 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-600/20 hover:bg-blue-500'}`}
+                    >
+                      {isEstimating ? (
+                        <i className="fas fa-circle-notch animate-spin text-xs"></i>
+                      ) : (
+                        <i className="fas fa-magic text-xs"></i>
+                      )}
+                      <span className="text-[10px] font-black uppercase tracking-widest">Estimar Conclusão</span>
+                    </button>
+                  ) : (
+                    <div className="flex flex-col items-end">
+                      <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-500">
+                        <i className="fas fa-robot text-[10px]"></i>
+                        <span className="text-[10px] font-black uppercase tracking-wider">Previsão: {estimation?.estimatedTime || formData.estimatedCompletionTime}</span>
+                        <button 
+                          type="button"
+                          onClick={() => setEstimation(null)}
+                          className="ml-1 opacity-50 hover:opacity-100"
+                        >
+                          <i className="fas fa-sync-alt text-[8px]"></i>
+                        </button>
+                      </div>
+                      {estimation?.reasoning && (
+                        <p className="mt-1 text-[8px] font-medium text-slate-400 max-w-[150px] text-right italic leading-tight">
+                          {estimation.reasoning}
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
               <div className={`w-full h-2 rounded-full overflow-hidden ${isDarkMode ? 'bg-white/5' : 'bg-slate-100'}`}>
@@ -979,25 +1064,43 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, initialService, ex
                 </div>
               </div>
 
-              <div className="space-y-3">
-                <label className="block text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Proprietário / Cliente</label>
-                <div className="relative group">
-                  <i className="fas fa-user absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 text-sm transition-colors group-focus-within:text-blue-500"></i>
-                  <input 
-                    type="text" 
-                    placeholder="Nome completo do cliente" 
-                    className={`w-full h-14 pl-12 pr-5 rounded-2xl border-2 font-bold transition-all outline-none focus:ring-4 focus:ring-blue-500/10 ${errors.customer ? 'border-red-500 focus:border-red-500 focus:ring-red-500/10' : (isDarkMode ? 'bg-white/5 border-white/5 text-white focus:border-blue-500/50' : 'bg-white border-slate-100 text-slate-800 focus:border-blue-500 shadow-sm')}`} 
-                    value={formData.customer || ''} 
-                    onChange={e => {
-                      const val = e.target.value;
-                      setFormData({ ...formData, customer: val });
-                      validateField('customer', val);
-                    }} 
-                  />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="space-y-3">
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Proprietário / Cliente</label>
+                  <div className="relative group">
+                    <i className="fas fa-user absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 text-sm transition-colors group-focus-within:text-blue-500"></i>
+                    <input 
+                      type="text" 
+                      placeholder="Nome completo do cliente" 
+                      className={`w-full h-14 pl-12 pr-5 rounded-2xl border-2 font-bold transition-all outline-none focus:ring-4 focus:ring-blue-500/10 ${errors.customer ? 'border-red-500 focus:border-red-500 focus:ring-red-500/10' : (isDarkMode ? 'bg-white/5 border-white/5 text-white focus:border-blue-500/50' : 'bg-white border-slate-100 text-slate-800 focus:border-blue-500 shadow-sm')}`} 
+                      value={formData.customer || ''} 
+                      onChange={e => {
+                        const val = e.target.value;
+                        setFormData({ ...formData, customer: val });
+                        validateField('customer', val);
+                      }} 
+                    />
+                  </div>
+                  {errors.customer && (
+                    <p className="text-[9px] font-black text-red-500 uppercase tracking-widest ml-1 animate-pulse">{errors.customer}</p>
+                  )}
                 </div>
-                {errors.customer && (
-                  <p className="text-[9px] font-black text-red-500 uppercase tracking-widest ml-1 animate-pulse">{errors.customer}</p>
-                )}
+
+                <div className="space-y-3">
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">ID da Chave Física (QR Code)</label>
+                  <div className="relative group">
+                    <i className="fas fa-key absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 text-sm transition-colors group-focus-within:text-blue-500"></i>
+                    <input 
+                      type="text" 
+                      placeholder="Escaneie ou digite o ID da chave" 
+                      className={`w-full h-14 pl-12 pr-5 rounded-2xl border-2 font-bold transition-all outline-none focus:ring-4 focus:ring-blue-500/10 ${isDarkMode ? 'bg-white/5 border-white/5 text-white focus:border-blue-500/50' : 'bg-white border-slate-100 text-slate-800 focus:border-blue-500 shadow-sm'}`} 
+                      value={formData.keyId || ''} 
+                      onChange={e => {
+                        setFormData({ ...formData, keyId: e.target.value });
+                      }} 
+                    />
+                  </div>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">

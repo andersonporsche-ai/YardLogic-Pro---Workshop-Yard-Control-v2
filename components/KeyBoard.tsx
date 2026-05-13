@@ -2,16 +2,25 @@ import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { Vehicle } from '../types';
 import { getSlotDisplayName } from '../constants';
+import KeyScanner from './KeyScanner';
 
 interface KeyBoardProps {
   vehicles: Vehicle[];
   yardOptions: { id: string; label: string; icon: string }[];
   yardLayouts: Record<string, { row: string, slots: number, label: string, isCorridor?: boolean }[]>;
   isDarkMode?: boolean;
+  onUpdateVehicle?: (vehicle: Vehicle) => void;
 }
 
-const KeyBoard: React.FC<KeyBoardProps> = ({ vehicles, yardOptions, yardLayouts, isDarkMode = false }) => {
+const KeyBoard: React.FC<KeyBoardProps> = ({ 
+  vehicles, 
+  yardOptions, 
+  yardLayouts, 
+  isDarkMode = false,
+  onUpdateVehicle
+}) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [scanningVehicleId, setScanningVehicleId] = useState<string | null>(null);
 
   // Helper to get row and slot info from layout
   const getSlotInfo = (yardId: string, slotIdx: number) => {
@@ -40,8 +49,28 @@ const KeyBoard: React.FC<KeyBoardProps> = ({ vehicles, yardOptions, yardLayouts,
     !['overview', 'dashboard', 'tasks', 'idleHistory', 'keyBoard'].includes(o.id)
   );
 
+  const handleKeyScan = (keyId: string) => {
+    if (!scanningVehicleId || !onUpdateVehicle) return;
+
+    const vehicle = vehicles.find(v => v.id === scanningVehicleId);
+    if (vehicle) {
+      onUpdateVehicle({
+        ...vehicle,
+        keyId
+      });
+    }
+    setScanningVehicleId(null);
+  };
+
   return (
     <div className={`p-6 min-h-screen ${isDarkMode ? 'bg-[#0D0F16]' : 'bg-slate-50'}`}>
+      {scanningVehicleId && (
+        <KeyScanner 
+          onScan={handleKeyScan}
+          onClose={() => setScanningVehicleId(null)}
+          isDarkMode={isDarkMode}
+        />
+      )}
       <div className="max-w-[1600px] mx-auto">
         <header className="mb-10">
           <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
@@ -151,10 +180,34 @@ const KeyBoard: React.FC<KeyBoardProps> = ({ vehicles, yardOptions, yardLayouts,
                             <span className={`text-[8px] font-bold uppercase mt-1 ${isDarkMode ? 'text-slate-600' : 'text-slate-400'}`}>
                               {v.consultant}
                             </span>
+                            {v.keyId && (
+                              <div className="flex items-center gap-1.5 mt-1">
+                                <i className="fas fa-key text-[8px] text-blue-500"></i>
+                                <span className="text-[8px] font-black text-blue-500 uppercase tracking-widest bg-blue-500/10 px-1.5 py-0.5 rounded">
+                                  KEY: {v.keyId}
+                                </span>
+                              </div>
+                            )}
                           </div>
 
-                          <div className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
-                            <i className="fas fa-chevron-right text-slate-500 text-[10px]"></i>
+                          <div className="ml-auto flex items-center gap-2">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setScanningVehicleId(v.id);
+                              }}
+                              className={`w-8 h-8 rounded-lg border flex items-center justify-center transition-all ${
+                                isDarkMode 
+                                  ? 'bg-white/5 border-white/5 text-slate-400 hover:bg-blue-600/20 hover:text-blue-400 hover:border-blue-500/30' 
+                                  : 'bg-white border-slate-100 text-slate-400 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200'
+                              }`}
+                              title={v.keyId ? "Alterar Chave Física" : "Vincular Chave Física"}
+                            >
+                              <i className={`fas ${v.keyId ? 'fa-sync-alt' : 'fa-qrcode'} text-[12px]`}></i>
+                            </button>
+                            <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                              <i className="fas fa-chevron-right text-slate-500 text-[10px]"></i>
+                            </div>
                           </div>
                         </div>
 

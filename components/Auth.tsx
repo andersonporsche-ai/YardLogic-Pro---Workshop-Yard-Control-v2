@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { User, UserRole } from '../types';
 import { supabase } from '../services/supabase';
+import { PorscheLogo } from './PorscheLogo';
 
 interface AuthProps {
   onLogin: (user: User) => void;
@@ -30,14 +31,27 @@ const Auth: React.FC<AuthProps> = ({ onLogin, isDarkMode, isResettingPassword, o
   const [isAdminPanel, setIsAdminPanel] = useState(showAdminManagement || false);
   const [biometricAvailable, setBiometricAvailable] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
+  const [biometricType, setBiometricType] = useState<'fingerprint' | 'face' | 'none'>('none');
   const videoRef = React.useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
     // Check for platform-specific biometric support (FaceID, Fingerprint, etc.)
-    if (window.PublicKeyCredential) {
-      PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
-        .then(available => setBiometricAvailable(available));
-    }
+    const checkBiometricSupport = async () => {
+      if (window.PublicKeyCredential) {
+        const available = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+        setBiometricAvailable(available);
+        
+        // Try to guess type if available (modern browsers)
+        if (available) {
+          // If FaceID or TouchID is specifically hinted at by the user agent
+          const ua = navigator.userAgent.toLowerCase();
+          if (ua.includes('iphone') || ua.includes('ipad')) setBiometricType('face');
+          else setBiometricType('fingerprint'); 
+        }
+      }
+    };
+    
+    checkBiometricSupport();
   }, []);
 
   const stopCamera = () => {
@@ -150,19 +164,25 @@ const Auth: React.FC<AuthProps> = ({ onLogin, isDarkMode, isResettingPassword, o
           throw signInError;
         }
         
-        if (data.user) {
-          // Fetch profile
-          const { data: profile, error: profileError } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', data.user.id)
-            .single();
+          if (data.user) {
+            // Fetch profile
+            const { data: profile, error: profileError } = await supabase
+              .from('profiles')
+              .select('*')
+              .eq('id', data.user.id)
+              .single();
 
-          if (profileError && profileError.code !== 'PGRST116') {
-            console.error('Erro ao buscar perfil:', profileError);
-          }
+            if (profileError && profileError.code !== 'PGRST116') {
+              console.error('Erro ao buscar perfil:', profileError);
+            }
 
-          onLogin({
+            // Update trusted credentials if biometric choice is true
+            if (profile?.fingerprint_enabled) {
+              localStorage.setItem('yardlogic_trusted_user', email);
+              localStorage.setItem('yardlogic_trusted_pass', password);
+            }
+
+            onLogin({
             id: data.user.id,
             name: profile?.name || data.user.email?.split('@')[0] || 'Usuário',
             email: data.user.email || '',
@@ -226,6 +246,12 @@ const Auth: React.FC<AuthProps> = ({ onLogin, isDarkMode, isResettingPassword, o
 
           if (profileError) console.error('Erro ao criar perfil:', profileError);
 
+          // Save for biometric if enabled
+          if (fingerprintEnabled) {
+            localStorage.setItem('yardlogic_trusted_user', email);
+            localStorage.setItem('yardlogic_trusted_pass', password);
+          }
+
           onLogin({
             id: data.user.id,
             name,
@@ -257,29 +283,60 @@ const Auth: React.FC<AuthProps> = ({ onLogin, isDarkMode, isResettingPassword, o
     }
 
     setIsScanning(true);
-    const cameraStarted = await startCamera();
     
-    if (!cameraStarted) {
-      setIsScanning(false);
-      return;
-    }
-
-    // Delay to show the "Scanning" effect
-    await new Promise(resolve => setTimeout(resolve, 2500));
-
+    // Start camera for visual "scanning" effect if it's FaceID style or just for premium feel
+    await startCamera();
+    
     try {
-      // 2. Trigger native biometric prompt
-      const credential = await navigator.credentials.get({
-        password: true,
-        mediation: 'optional'
-      }) as PasswordCredential | null;
+      // 2. Trigger native biometric prompt via WebAuthn
+      // We use a challenge to trigger the native UI
+      const challenge = new Uint8Array(32);
+      window.crypto.getRandomValues(challenge);
 
-      if (credential && credential.id && credential.password) {
-        setSuccess('Biometria autenticada! Acessando...');
+      // Attempt to get credentials with biometrics (platform)
+      // Note: In a real app with server, we'd use allowCredentials from our DB
+      const options: CredentialRequestOptions = {
+        publicKey: {
+          challenge: challenge,
+          timeout: 60000,
+          userVerification: "required",
+          rpId: window.location.hostname === 'localhost' ? 'localhost' : window.location.hostname,
+        }
+      };
+
+      // Since we are likely in a prototype/demo mode without a production domain or origin constraints,
+      // we'll try the publicKey first, then fallback to Password Management if that fails
+      try {
+        await navigator.credentials.get(options);
+        // If we reach here, the biometric verification on the DEVICE passed
+        setSuccess('Biometria autenticada pelo dispositivo!');
+      } catch (authErr) {
+        console.warn('PublicKey auth failed, trying Password Manager:', authErr);
+        // Fallback to password manager/CMAPI
+        const credential = await navigator.credentials.get({
+          password: true,
+          mediation: 'optional'
+        }) as PasswordCredential | null;
+
+        if (!credential) {
+          throw new Error('Autenticação cancelada ou não encontrada.');
+        }
         
+        setEmail(credential.id);
+        setPassword(credential.password);
+      }
+
+      // 3. Perform manual login with the gathered credentials OR 
+      // If we authenticated but don't have credentials (e.g. publicKey success only), 
+      // we check for a "Trusted User" in local storage
+      const savedUser = localStorage.getItem('yardlogic_trusted_user');
+      const savedPass = localStorage.getItem('yardlogic_trusted_pass');
+
+      if (savedUser && savedPass) {
+        setLoading(true);
         const { data, error: signInError } = await supabase.auth.signInWithPassword({
-          email: credential.id.trim(),
-          password: credential.password,
+          email: savedUser.trim(),
+          password: savedPass,
         });
 
         if (signInError) throw signInError;
@@ -304,12 +361,14 @@ const Auth: React.FC<AuthProps> = ({ onLogin, isDarkMode, isResettingPassword, o
           });
         }
       } else {
-        setError('Por favor, faça o login manual uma vez e salve sua senha para habilitar a biometria.');
+        setError('Por favor, faça o login manual com senha uma vez para registrar sua biometria neste dispositivo.');
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Erro na autenticação biométrica.';
       setError(message);
     } finally {
+      // Delay for the animation to look "high-tech"
+      await new Promise(resolve => setTimeout(resolve, 1000));
       stopCamera();
       setIsScanning(false);
     }
@@ -374,14 +433,11 @@ const Auth: React.FC<AuthProps> = ({ onLogin, isDarkMode, isResettingPassword, o
         animate={{ opacity: 1, scale: 1, y: 0 }}
         className={`w-full max-w-md p-8 rounded-[2.5rem] border shadow-2xl backdrop-blur-xl relative z-10 ${isDarkMode ? 'bg-[#0A0B10]/90 border-white/5' : 'bg-white/90 border-slate-200'}`}
       >
-        <div className="flex flex-col items-center mb-8">
-          <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center text-white text-3xl shadow-xl shadow-blue-600/20 mb-4">
-            <i className="fas fa-shield-halved"></i>
+        <div className="flex flex-col items-center mb-8 gap-4 text-center">
+          <div className="flex items-center gap-6">
+            <PorscheLogo size={300} />
           </div>
-          <h1 className={`text-3xl font-outfit font-black uppercase tracking-tighter leading-none ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-            YardLogic <span className="text-blue-600">Pro</span>
-          </h1>
-          <p className="text-[10px] font-space font-black uppercase tracking-[0.3em] text-slate-500 mt-2">
+          <p className="text-[10px] font-space font-black uppercase tracking-[0.3em] text-slate-500">
             Acesso Restrito Porsche
           </p>
         </div>
@@ -821,8 +877,10 @@ const Auth: React.FC<AuthProps> = ({ onLogin, isDarkMode, isResettingPassword, o
                       onClick={handleFingerprintLogin}
                       className={`w-18 h-18 rounded-2xl border-2 flex flex-col items-center justify-center transition-all hover:scale-105 active:scale-95 relative z-10 ${isDarkMode ? 'bg-white/5 border-white/10 text-blue-500 hover:border-blue-500/50' : 'bg-white border-slate-200 text-blue-600 hover:border-blue-500 shadow-xl'}`}
                     >
-                      <i className={`fas ${biometricAvailable ? 'fa-face-smile' : 'fa-fingerprint'} text-3xl mb-1`}></i>
-                      <span className="text-[7px] font-black uppercase tracking-widest">Biometria</span>
+                      <i className={`fas ${biometricType === 'face' ? 'fa-face-smile' : 'fa-fingerprint'} text-3xl mb-1`}></i>
+                      <span className="text-[7px] font-black uppercase tracking-widest">
+                        {biometricType === 'face' ? 'FaceID' : 'TouchID'}
+                      </span>
                     </button>
                     {!biometricAvailable && (
                       <div className="absolute top-0 right-[-40px] w-6 h-6 bg-amber-500/10 text-amber-500 rounded-full flex items-center justify-center" title="Biometria não configurada no dispositivo">

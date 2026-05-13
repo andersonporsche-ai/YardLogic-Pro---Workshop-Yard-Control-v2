@@ -3,7 +3,7 @@ import React, { useMemo, useState, useRef } from 'react';
 import { Vehicle, ActivityLog } from '../types';
 import { motion } from 'motion/react';
 import { MAX_SLOTS, CONSULTANTS, ALERT_THRESHOLDS } from '../constants';
-import { getYardInsights, getStrategicOptimization, getLayoutAndFlowOptimization, getStrategicOptimizationPro, getYardOptimizationSummary } from '../services/geminiService';
+import { getYardInsights, getStrategicOptimization, getLayoutAndFlowOptimization, getStrategicOptimizationPro, getYardOptimizationSummary, getBulkCompletionEstimations } from '../services/geminiService';
 import { analyzeYardEfficiency } from '../services/yardOptimization';
 import { toPng } from 'html-to-image';
 import Markdown from 'react-markdown';
@@ -51,6 +51,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   const [strategicProInsights, setStrategicProInsights] = useState<string | null>(null);
   const [layoutInsights, setLayoutInsights] = useState<string | null>(null);
   const [optimizationSummary, setOptimizationSummary] = useState<string | null>(null);
+  const [bulkEstimations, setBulkEstimations] = useState<Record<string, { time: string, reasoning: string }>>({});
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);
@@ -108,6 +109,18 @@ const Dashboard: React.FC<DashboardProps> = ({
     const result = await getYardOptimizationSummary(vehicles, activityLogs);
     setOptimizationSummary(result);
     setIsSummarizing(false);
+  };
+
+  const handleRunBulkEstimations = async () => {
+    setIsGenerating(true);
+    try {
+      const results = await getBulkCompletionEstimations(vehicles, activityLogs);
+      setBulkEstimations(results);
+    } catch (error) {
+      console.error("Bulk Estimation Failed:", error);
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   const stats = useMemo(() => {
@@ -1163,6 +1176,71 @@ const Dashboard: React.FC<DashboardProps> = ({
              <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-relaxed">Pátio operando em conformidade com as diretrizes de giro de ativos.</p>
           </div>
         </div>
+      </div>
+      {/* 4. BLOCO DE ESTIMATIVAS DE FROTA (REQUISITO IA) */}
+      <div className={`p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl md:rounded-[2.8rem] border transition-all ${isDarkMode ? 'bg-indigo-500/[0.03] border-indigo-500/20' : 'bg-indigo-50/50 border-indigo-100 shadow-sm'}`}>
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 mb-8">
+          <div className="flex items-center gap-4">
+            <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20">
+              <i className="fas fa-hourglass-half"></i>
+            </div>
+            <div>
+              <h4 className={`text-sm font-black uppercase tracking-widest ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Estimativas de Conclusão da Frota</h4>
+              <p className="text-[10px] text-indigo-500 font-bold uppercase tracking-tight">Análise Preditiva via Gemini AI</p>
+            </div>
+          </div>
+          <button 
+            onClick={handleRunBulkEstimations}
+            disabled={isGenerating || vehicles.length === 0}
+            className={`no-print px-5 py-2.5 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all ${isGenerating ? 'bg-indigo-500/50' : 'bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-600/20'} text-white flex items-center gap-2`}
+          >
+            {isGenerating ? (
+              <><i className="fas fa-circle-notch animate-spin"></i> Processando...</>
+            ) : (
+              <><i className="fas fa-magic"></i> Estimar Toda Frota</>
+            )}
+          </button>
+        </div>
+
+        {Object.keys(bulkEstimations).length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {vehicles.filter(v => bulkEstimations[v.id]).map(v => (
+              <div key={v.id} className={`p-5 rounded-2xl border flex flex-col gap-3 transition-all hover:scale-[1.01] ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-white border-slate-200'}`}>
+                <div className="flex justify-between items-start">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-slate-900 border-2 flex items-center justify-center text-[10px] font-black text-white" style={{ borderColor: v.prisma.color }}>
+                      #{v.prisma.number}
+                    </div>
+                    <div className="flex flex-col">
+                      <span className={`text-[10px] font-black uppercase tracking-widest ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>{v.plate}</span>
+                      <h5 className={`text-xs font-black uppercase truncate max-w-[120px] ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>{v.model}</h5>
+                    </div>
+                  </div>
+                  <div className="flex flex-col items-end">
+                    <span className="text-[9px] font-black text-indigo-500 uppercase tracking-widest">Restam</span>
+                    <span className={`text-sm font-black tabular-nums transition-colors ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                      {bulkEstimations[v.id].time}
+                    </span>
+                  </div>
+                </div>
+                <div className={`p-3 rounded-xl ${isDarkMode ? 'bg-white/[0.03]' : 'bg-slate-50'} border border-dashed border-slate-200`}>
+                   <p className="text-[10px] leading-tight font-medium text-slate-500 italic">
+                     <i className="fas fa-quote-left text-[8px] mr-1 opacity-40"></i>
+                     {bulkEstimations[v.id].reasoning}
+                   </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="py-12 flex flex-col items-center justify-center border-2 border-dashed border-indigo-500/10 rounded-[2.8rem]">
+             <i className="fas fa-microchip text-4xl text-indigo-500/20 mb-4"></i>
+             <h5 className={`text-xs font-black uppercase tracking-widest ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
+               Clique para gerar estimativas inteligentes para {vehicles.filter(v => v.washStatus !== 'Veículo Pronto').length} veículos
+             </h5>
+             <p className="text-[9px] font-bold text-slate-500 uppercase mt-2">Usa histórico de logs e tempo médio Porsche</p>
+          </div>
+        )}
       </div>
     </div>
   );

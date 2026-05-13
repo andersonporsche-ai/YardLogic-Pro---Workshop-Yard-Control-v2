@@ -12,6 +12,7 @@ import Auth from './components/Auth';
 import ConsultantTaskBoard from './components/ConsultantTaskBoard';
 import IdleHistory from './components/IdleHistory';
 import CriticalCasesReport from './components/CriticalCasesReport';
+import PerformanceReport from './components/PerformanceReport';
 import KeyBoard from './components/KeyBoard';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -21,9 +22,12 @@ import { differenceInHours } from 'date-fns';
 import { MAX_SLOTS, MAX_SLOTS_FACTORY, MAX_SLOTS_1ST_FLOOR, MAX_SLOTS_1ST_FACTORY, MAX_SLOTS_P1, MAX_SLOTS_P2, MAX_SLOTS_P6, MAX_SLOTS_COBERTURA, YARD_LAYOUT, YARD_LAYOUT_FACTORY, YARD_LAYOUT_1ST_FLOOR, YARD_LAYOUT_1ST_FACTORY, YARD_LAYOUT_P1, YARD_LAYOUT_P2, YARD_LAYOUT_P6, YARD_LAYOUT_COBERTURA, ALERT_THRESHOLDS, CONSULTANTS, DEFAULT_YARD_OPTIONS } from './constants';
 import { supabase } from './services/supabase';
 import { databaseService } from './services/database';
+import { sendReadyNotification } from './services/emailService';
+
+import { PorscheLogo } from './components/PorscheLogo';
 
 type ThemeMode = 'auto' | 'light' | 'dark';
-type YardTab = 'yard' | 'yard2' | 'yard3' | 'yard4' | 'yardP1' | 'yardP2' | 'yardP6' | 'yardCob' | 'dashboard' | 'tasks' | 'idleHistory' | 'overview' | 'keyBoard' | 'criticalReport';
+type YardTab = 'yard' | 'yard2' | 'yard3' | 'yard4' | 'yardP1' | 'yardP2' | 'yardP6' | 'yardCob' | 'dashboard' | 'tasks' | 'idleHistory' | 'overview' | 'keyBoard' | 'criticalReport' | 'performanceReport';
 
 interface Toast {
   id: string;
@@ -180,9 +184,20 @@ const App: React.FC = () => {
   const [showReportSuccess, setShowReportSuccess] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [slaAlertsEnabled, setSlaAlertsEnabled] = useState<boolean>(() => {
+    const saved = localStorage.getItem('yard_sla_alerts_enabled');
+    return saved === null ? true : saved === 'true';
+  });
 
   const [isResettingPassword, setIsResettingPassword] = useState(false);
   const [showUserManagement, setShowUserManagement] = useState(false);
+  const [isAlertsModalOpen, setIsAlertsModalOpen] = useState(false);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
+
+  // Sync settings
+  useEffect(() => {
+    localStorage.setItem('yard_sla_alerts_enabled', slaAlertsEnabled.toString());
+  }, [slaAlertsEnabled]);
 
   // Auth Effect
   useEffect(() => {
@@ -416,27 +431,37 @@ const App: React.FC = () => {
 
   // Monitoramento de Notificações e Alertas Críticos
   useEffect(() => {
+    if (!slaAlertsEnabled) return;
+
+    // Suppress alerts during the first 3 seconds of the app life to avoid startup blast
+    if (isInitialLoad) {
+      const timer = setTimeout(() => setIsInitialLoad(false), 3000);
+      return () => clearTimeout(timer);
+    }
+
     const checkReadyVehicles = (vList: Vehicle[], yardName: string) => {
       vList.forEach(v => {
         // Regra: Veículo Pronto há mais de 2 horas
         if (v.washStatus === 'Veículo Pronto' && !notifiedVehicleIds.has(v.id)) {
           const hoursInStatus = differenceInHours(now, new Date(v.statusChangedAt || v.entryTime));
+          const isConsultant = currentUser?.name.toLowerCase() === v.consultant?.toLowerCase();
           
           if (hoursInStatus >= 2) {
             // Browser Notification (if permission granted)
             if (notificationPermission === 'granted') {
-              new Notification('Atenção: Logística de Pátio', {
-                body: `O veículo ${v.model} (${v.plate}) está pronto há ${hoursInStatus}h no pátio ${yardName}. Favor liberar a vaga ${v.slotIndex + 1}.`,
+              new Notification(isConsultant ? '🏁 URGENTE: Liberação de Vaga' : 'Atenção: Logística de Pátio', {
+                body: `O veículo ${v.model} (${v.plate}) está pronto há ${hoursInStatus}h no pátio ${yardName}. FAVOR LIBERAR A VAGA ${v.slotIndex + 1} IMEDIATAMENTE.`,
                 icon: 'https://cdn-icons-png.flaticon.com/512/1165/1165936.png',
-                tag: `ready-${v.id}`
+                tag: `ready-${v.id}`,
+                requireInteraction: true
               });
             }
 
             // Toast Notification
             addToast({
-              title: 'Otimização de Vaga',
-              message: `O veículo ${v.model} (${v.plate}) está pronto há ${hoursInStatus}h. Sugerimos a liberação da vaga ${v.slotIndex + 1} (${yardName}).`,
-              type: 'warning'
+              title: isConsultant ? '🚨 SEU VEÍCULO ESTÁ PARADO!' : 'Urgência: Otimização de Vaga',
+              message: `O veículo ${v.model} (${v.plate}) está ocupando a vaga ${v.slotIndex + 1} (${yardName}) há ${hoursInStatus}h mesmo estando PRONTO. Favor liberar a vaga.`,
+              type: 'error' // Usamos error para maior impacto visual se estiver parado há muito tempo
             });
 
             setNotifiedVehicleIds(prev => new Set(prev).add(v.id));
@@ -459,7 +484,7 @@ const App: React.FC = () => {
     yardPools.forEach(pool => checkReadyVehicles(pool.vehicles, pool.name));
   }, [
     vehicles, vehicles2, vehicles3, vehicles4, vehiclesP1, vehiclesP2, vehiclesP6, vehiclesCob,
-    notificationPermission, notifiedVehicleIds, now, addToast
+    notificationPermission, notifiedVehicleIds, now, addToast, currentUser?.name, slaAlertsEnabled, isInitialLoad
   ]);
 
   const requestNotificationPermission = async () => {
@@ -539,26 +564,41 @@ const App: React.FC = () => {
               const slotName = vehicle.slotIndex + 1;
               const yardLabel = yardOptions.find(y => y.id === yardId)?.label || 'Pátio';
               
-              addToast({
-                title: isConsultant ? 'Seu Veículo está Pronto!' : 'Veículo Pronto para Entrega',
-                message: `O veículo ${vehicle.model} (${vehicle.plate}) na vaga ${slotName} (${yardLabel}) está pronto para entrega.`,
-                type: 'success'
-              });
+              if (isConsultant) {
+                // Notificação Ultra-Urgente para o Consultor Dono do Veículo
+                addToast({
+                  title: '🚨 URGENTE: VEÍCULO PRONTO!',
+                  message: `Consultor ${vehicle.consultant}, o veículo ${vehicle.model} (${vehicle.plate}) na vaga ${slotName} (${yardLabel}) ACABOU DE FICAR PRONTO. Favor providenciar a retirada para liberação de vaga.`,
+                  type: 'warning'
+                });
+              } else {
+                addToast({
+                  title: 'Veículo Pronto para Entrega',
+                  message: `O veículo ${vehicle.model} (${vehicle.plate}) na vaga ${slotName} (${yardLabel}) está pronto para entrega. Consultor: ${vehicle.consultant}.`,
+                  type: 'success'
+                });
+              }
 
               if (notificationPermission === 'granted') {
                 try {
-                  const notificationTitle = isConsultant ? '🏁 Seu Veículo está Pronto!' : '🏁 Veículo Pronto: ' + vehicle.plate;
-                  const notificationBody = `${vehicle.model} • Vaga ${slotName} (${yardLabel})\nStatus: PRONTO PARA ENTREGA${isConsultant ? '\nFavor entrar em contato com o cliente.' : ''}`;
+                  const notificationTitle = isConsultant ? '🏁 URGENTE: Seu Veículo está Pronto!' : '🏁 Veículo Pronto: ' + vehicle.plate;
+                  const notificationBody = `URGÊNCIA NA LIBERAÇÃO: ${vehicle.model} • Vaga ${slotName} (${yardLabel})\nFavor retirar o veículo do pátio imediatamente para liberar a vaga.${isConsultant ? '\n\nO cliente aguarda seu contato.' : ''}`;
                   
                   new Notification(notificationTitle, {
                     body: notificationBody,
                     icon: 'https://cdn-icons-png.flaticon.com/512/1165/1165936.png',
-                    tag: `ready-${vehicle.id}`
+                    tag: `ready-${vehicle.id}`,
+                    requireInteraction: true // Força o usuário a interagir (mais urgente)
                   });
                 } catch (e) {
                   console.error('Realtime notification error:', e);
                 }
               }
+
+              // 3. Email Notification
+              sendReadyNotification(vehicle, yardLabel).catch(err => {
+                console.error('Realtime Email Notification Error:', err);
+              });
             }
           }
         }
@@ -604,9 +644,11 @@ const App: React.FC = () => {
   const criticalVehicles = useMemo(() => {
     return currentVehicles.filter(v => {
       try {
-        // Replaced parseISO with new Date
         const hoursStayed = differenceInHours(now, new Date(v.entryTime));
-        return hoursStayed >= ALERT_THRESHOLDS.SEVERE;
+        const isReady = v.washStatus === 'Veículo Pronto';
+        const hoursInStatus = isReady ? differenceInHours(now, new Date(v.statusChangedAt || v.entryTime)) : 0;
+        
+        return hoursStayed >= ALERT_THRESHOLDS.SEVERE || (isReady && hoursInStatus >= 2);
       } catch {
         return false;
       }
@@ -764,21 +806,41 @@ const App: React.FC = () => {
       if (isNewlyReady) {
         const slotName = vehicle.slotIndex + 1;
         const yardName = getYardName(targetYardId);
-        const consultantInfo = vehicle.consultant ? ` (Consultor: ${vehicle.consultant})` : '';
+        const isConsultant = currentUser?.name.toLowerCase() === vehicle.consultant?.toLowerCase();
         
-        addToast({
-          title: 'Status: Veículo Pronto',
-          message: `O veículo ${vehicle.model} (${vehicle.plate}) na vaga ${slotName} no ${yardName} agora está pronto.${consultantInfo}`,
-          type: 'success'
-        });
+        if (isConsultant) {
+          addToast({
+            title: '🚨 URGENTE: SEU VEÍCULO ESTÁ PRONTO!',
+            message: `O veículo ${vehicle.model} (${vehicle.plate}) na vaga ${slotName} no ${yardName} já está pronto. FAVOR LIBERAR A VAGA IMEDIATAMENTE.`,
+            type: 'warning'
+          });
+        } else {
+          addToast({
+            title: 'Status: Veículo Pronto',
+            message: `O veículo ${vehicle.model} (${vehicle.plate}) na vaga ${slotName} no ${yardName} agora está pronto. (Consultor: ${vehicle.consultant})`,
+            type: 'success'
+          });
+        }
 
         // Trigger native notification if permitted
         if ('Notification' in window && Notification.permission === 'granted') {
-          new Notification('Veículo Pronto', {
-            body: `${vehicle.model} (${vehicle.plate}) na vaga ${slotName} (${yardName}) está pronto para entrega.`,
-            icon: '/favicon.ico'
+          const notificationTitle = isConsultant ? '🏁 URGENTE: Veículo Pronto' : 'Veículo Pronto: ' + vehicle.plate;
+          new Notification(notificationTitle, {
+            body: `URGÊNCIA: ${vehicle.model} (${vehicle.plate}) na vaga ${slotName} (${yardName}) pronto para entrega. Favor liberar a vaga.`,
+            icon: '/favicon.ico',
+            requireInteraction: true
           });
         }
+
+        // Send Email Notification
+        sendReadyNotification(vehicle, yardName).catch(err => {
+          console.error('Email Notification Error:', err);
+          addToast({
+            title: 'Notificação por E-mail',
+            message: 'Não foi possível enviar o e-mail para o consultor. Verifique o console.',
+            type: 'error'
+          });
+        });
       }
     }
 
@@ -1184,6 +1246,41 @@ const App: React.FC = () => {
 
   const totalMaxSlots = MAX_SLOTS + MAX_SLOTS_FACTORY + MAX_SLOTS_1ST_FLOOR + MAX_SLOTS_1ST_FACTORY + MAX_SLOTS_P1 + MAX_SLOTS_P2 + MAX_SLOTS_P6 + MAX_SLOTS_COBERTURA;
 
+  const getAlertSeverity = (hours: number) => {
+    if (hours >= ALERT_THRESHOLDS.SEVERE) return { label: 'CRÍTICO', color: 'text-red-500', bg: 'bg-red-500/10', border: 'border-red-500/20' };
+    if (hours >= ALERT_THRESHOLDS.CRITICAL) return { label: 'ALTO', color: 'text-orange-500', bg: 'bg-orange-500/10', border: 'border-orange-500/20' };
+    if (hours >= ALERT_THRESHOLDS.WARNING) return { label: 'ALERTA', color: 'text-amber-500', bg: 'bg-amber-500/10', border: 'border-amber-500/20' };
+    return { label: 'NORMAL', color: 'text-slate-400', bg: 'bg-slate-400/10', border: 'border-slate-400/20' };
+  };
+
+  const allAlerts = useMemo(() => {
+    return allActiveVehicles
+      .map(v => {
+        const hoursStayed = differenceInHours(now, new Date(v.entryTime));
+        const isReady = v.washStatus === 'Veículo Pronto';
+        const hoursInStatus = isReady ? differenceInHours(now, new Date(v.statusChangedAt || v.entryTime)) : 0;
+        
+        let hoursForSLA = hoursStayed;
+        let type: 'total' | 'ready' = 'total';
+        
+        if (isReady && hoursInStatus >= 2) {
+          // If it's ready, we prioritize the status-based SLA for alerting
+          // We normalize it so it shows up as severe in the alert severity logic
+          hoursForSLA = Math.max(hoursStayed, ALERT_THRESHOLDS.SEVERE);
+          type = 'ready';
+        }
+
+        return { vehicle: v, hours: hoursStayed, hoursInStatus, type, severity: getAlertSeverity(hoursForSLA) };
+      })
+      .filter(a => a.hours >= ALERT_THRESHOLDS.WARNING || (a.vehicle.washStatus === 'Veículo Pronto' && a.hoursInStatus >= 2))
+      .sort((a, b) => {
+        // Prioritize "Ready" alerts, then sort by hours
+        if (a.type === 'ready' && b.type !== 'ready') return -1;
+        if (a.type !== 'ready' && b.type === 'ready') return 1;
+        return b.hours - a.hours;
+      });
+  }, [allActiveVehicles, now]);
+
   return (
     <>
       {loading ? (
@@ -1233,24 +1330,23 @@ const App: React.FC = () => {
               initial={{ opacity: 0, y: -10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.6, delay: 0.2 }}
-              className="flex flex-col"
+              className="flex items-center gap-3"
             >
-              <h1 className="font-outfit font-black text-2xl tracking-tighter leading-none">
-                Logística de Pátio <span className="text-blue-500">Porsche</span>
-              </h1>
-              <span className="text-[7px] font-space font-black uppercase tracking-[0.3em] text-slate-600 mt-1">
-                Porsche Workshop System
-              </span>
+              <PorscheLogo size={120} className="shrink-0" />
             </motion.div>
             
             {criticalVehicles.length > 0 && (
-              <div className="relative flex items-center justify-center">
+              <button 
+                onClick={() => setIsAlertsModalOpen(true)}
+                className="relative flex items-center justify-center group active:scale-95 transition-all"
+              >
+                <div className="absolute -inset-2 bg-red-600/20 rounded-full blur-lg opacity-0 group-hover:opacity-100 transition-opacity"></div>
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75"></span>
                 <div className="relative bg-red-600 text-white px-3 py-1 rounded-xl text-[11px] font-black shadow-[0_0_20px_rgba(239,68,68,0.5)] border border-red-400 flex items-center gap-2">
                   <i className="fas fa-biohazard animate-pulse"></i>
                   {criticalVehicles.length}
                 </div>
-              </div>
+              </button>
             )}
           </div>
         </div>
@@ -1266,6 +1362,28 @@ const App: React.FC = () => {
               />
             ))}
           </Reorder.Group>
+
+          <div className="bg-white/5 rounded-[2rem] p-6 border border-white/10 shadow-inner">
+             <div className="flex items-center justify-between mb-4">
+               <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Alertas de SLA</span>
+               <div className={`w-2.5 h-2.5 rounded-full ${slaAlertsEnabled ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]' : 'bg-slate-700'}`}></div>
+             </div>
+             <div className="flex items-center gap-3">
+               <button 
+                  onClick={() => setSlaAlertsEnabled(!slaAlertsEnabled)}
+                  className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${slaAlertsEnabled ? 'bg-blue-600/10 text-blue-500 border border-blue-500/20' : 'bg-white/5 text-slate-400 border border-white/5 hover:bg-white/10'}`}
+               >
+                 {slaAlertsEnabled ? 'Alertas: ON' : 'Alertas: OFF'}
+               </button>
+               <button 
+                  disabled={criticalVehicles.length === 0}
+                  onClick={() => setIsAlertsModalOpen(true)}
+                  className={`w-12 h-11 flex items-center justify-center rounded-xl border transition-all ${criticalVehicles.length > 0 ? 'bg-red-500 text-white border-red-400 animate-pulse' : 'bg-white/5 text-slate-600 border-white/5'}`}
+               >
+                 <i className="fas fa-bell"></i>
+               </button>
+             </div>
+          </div>
 
           <div className="bg-white/5 rounded-[2rem] p-6 border border-white/10 shadow-inner">
              <div className="flex items-center justify-between mb-4">
@@ -1311,18 +1429,23 @@ const App: React.FC = () => {
         <header className="no-print flex flex-col xl:flex-row xl:items-center justify-between gap-6 sm:gap-8 shrink-0">
           <div className="relative">
             <div className="absolute -left-4 top-0 bottom-0 w-1 bg-blue-600 rounded-full opacity-50"></div>
-            <motion.h2 
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.8, ease: "easeOut" }}
-              className={`text-3xl sm:text-4xl md:text-5xl font-outfit font-black uppercase tracking-tighter leading-[0.9] mb-2 transition-all ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
-            >
-              Logística de <span className="text-blue-600">Pátios</span> <motion.span 
-                animate={{ opacity: [0.3, 0.6, 0.3] }}
-                transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
-                className="opacity-40"
-              >Porsche</motion.span>
-            </motion.h2>
+            <div className="flex items-center gap-6 mb-2">
+              <div className="flex items-center gap-6">
+                <PorscheLogo size={240} className="shrink-0" />
+              </div>
+              <motion.h2 
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.8, ease: "easeOut" }}
+                className={`text-3xl sm:text-4xl md:text-5xl font-outfit font-black uppercase tracking-tighter leading-[0.9] transition-all ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
+              >
+                Logística de <span className="text-blue-600">Pátios</span> <motion.span 
+                  animate={{ opacity: [0.3, 0.6, 0.3] }}
+                  transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
+                  className="opacity-40"
+                >Porsche</motion.span>
+              </motion.h2>
+            </div>
             <div className="flex flex-wrap items-center gap-3 sm:gap-4">
               <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${isDarkMode ? 'bg-white/10 text-blue-400' : 'bg-slate-900 text-white'}`}>
                 <span className="relative flex h-2 w-2">
@@ -1487,6 +1610,7 @@ const App: React.FC = () => {
               yardOptions={yardOptions}
               yardLayouts={yardLayouts}
               isDarkMode={isDarkMode}
+              onUpdateVehicle={handleSaveVehicle}
             />
           ) : activeTab === 'overview' ? (
             <OperationsOverview 
@@ -1517,6 +1641,10 @@ const App: React.FC = () => {
             />
           ) : activeTab === 'criticalReport' ? (
             <CriticalCasesReport
+              isDarkMode={isDarkMode}
+            />
+          ) : activeTab === 'performanceReport' ? (
+            <PerformanceReport
               isDarkMode={isDarkMode}
             />
           ) : (
@@ -1569,6 +1697,105 @@ const App: React.FC = () => {
           isDarkMode={isDarkMode}
         />
       )}
+
+      <AnimatePresence>
+        {isAlertsModalOpen && (
+          <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsAlertsModalOpen(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className={`relative w-full max-w-2xl max-h-[80vh] rounded-[2.5rem] shadow-2xl border overflow-hidden flex flex-col ${isDarkMode ? 'bg-[#0A0B10] border-white/10' : 'bg-white border-slate-200'}`}
+            >
+              <div className={`p-8 border-b flex items-center justify-between ${isDarkMode ? 'border-white/5 bg-white/[0.02]' : 'border-slate-100 bg-slate-50'}`}>
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-2xl bg-red-600 flex items-center justify-center text-white shadow-lg shadow-red-600/20">
+                    <i className="fas fa-biohazard text-xl"></i>
+                  </div>
+                  <div>
+                    <h3 className={`text-xl font-black uppercase tracking-tighter ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Central de Alertas SLA</h3>
+                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-0.5">Monitoramento de permanência crítica</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setIsAlertsModalOpen(false)}
+                  className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${isDarkMode ? 'hover:bg-white/5 text-slate-500' : 'hover:bg-slate-100 text-slate-400'}`}
+                >
+                  <i className="fas fa-times"></i>
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-4">
+                {allAlerts.length > 0 ? (
+                  allAlerts.map(({ vehicle, hours, severity }) => (
+                    <button 
+                      key={vehicle.id}
+                      onClick={() => {
+                        setActiveTab(vehicle.yardId as YardTab);
+                        setSelectedSlot(vehicle.slotIndex);
+                        setIsFormOpen(true);
+                        setIsAlertsModalOpen(false);
+                      }}
+                      className={`p-5 rounded-2xl border flex items-center justify-between transition-all hover:scale-[1.02] active:scale-[0.98] text-left ${isDarkMode ? 'bg-white/[0.02] border-white/5' : 'bg-white border-slate-100 shadow-sm'}`}
+                    >
+                      <div className="flex items-center gap-5">
+                        <div className="w-14 h-14 rounded-2xl bg-slate-900 flex items-center justify-center text-white border-2 overflow-hidden shrink-0" style={{ borderColor: vehicle.prisma.color }}>
+                          <span className="text-sm font-black tracking-tighter">#{vehicle.prisma.number}</span>
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[10px] font-black uppercase tracking-widest ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>{vehicle.plate}</span>
+                            <span className={`px-2 py-0.5 rounded-md text-[8px] font-black uppercase tracking-widest ${severity.bg} ${severity.color} border ${severity.border}`}>
+                              {severity.label}
+                            </span>
+                          </div>
+                          <h4 className={`text-sm font-black uppercase tracking-tight truncate max-w-[200px] ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                            {vehicle.model}
+                          </h4>
+                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tight">
+                            Consultor: {vehicle.consultant} • {DEFAULT_YARD_OPTIONS.find(o => o.id === vehicle.yardId)?.label}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex flex-col items-end gap-1">
+                        <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Estadia</span>
+                        <span className={`text-xl font-black tabular-nums tracking-tighter ${severity.color}`}>
+                          {hours}h
+                        </span>
+                      </div>
+                    </button>
+                  ))
+                ) : (
+                  <div className="py-20 flex flex-col items-center justify-center text-center">
+                    <div className="w-20 h-20 rounded-full bg-emerald-500/10 flex items-center justify-center text-emerald-500 mb-6 border border-emerald-500/20">
+                      <i className="fas fa-check-circle text-4xl"></i>
+                    </div>
+                    <h4 className={`text-lg font-black uppercase tracking-tighter ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Sem Alertas Críticos</h4>
+                    <p className="text-xs font-medium text-slate-500 max-w-[280px] mt-2">Todos os veículos estão dentro dos limites de SLA aceitáveis.</p>
+                  </div>
+                )}
+              </div>
+
+              <div className={`p-6 border-t ${isDarkMode ? 'border-white/5 bg-white/[0.01]' : 'border-slate-100 bg-slate-50'}`}>
+                <div className="flex items-center justify-between text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">
+                  <span>Total de Alertas: {allAlerts.length}</span>
+                  <span className="flex items-center gap-2">
+                    <i className="fas fa-info-circle text-blue-500"></i>
+                    Clique em um alerta para localizar o veículo
+                  </span>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
     
     {/* Toast Container */}

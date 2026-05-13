@@ -139,7 +139,9 @@ export const databaseService = {
       wash_status: v.washStatus || 'Não Solicitado',
       delivery_status: v.deliveryStatus || 'Aguardando Liberação',
       slot_index: v.slotIndex ?? 0,
-      yard_id: yardId || v.yardId || 'yard'
+      yard_id: yardId || v.yardId || 'yard',
+      estimated_completion_time: v.estimatedCompletionTime,
+      estimation_reasoning: v.estimationReasoning
     };
   },
 
@@ -160,6 +162,8 @@ export const databaseService = {
     delivery_status: string;
     slot_index: number;
     yard_id: string;
+    estimated_completion_time?: string;
+    estimation_reasoning?: string;
   }): Vehicle {
     const now = new Date().toISOString();
     return {
@@ -180,7 +184,9 @@ export const databaseService = {
       washStatus: v.wash_status,
       deliveryStatus: v.delivery_status || 'Aguardando Liberação',
       slotIndex: v.slot_index,
-      yardId: v.yard_id
+      yardId: v.yard_id,
+      estimatedCompletionTime: v.estimated_completion_time,
+      estimationReasoning: v.estimation_reasoning
     };
   }
 };

@@ -23,7 +23,7 @@ import { CSS } from '@dnd-kit/utilities';
 import Markdown from 'react-markdown';
 import { Vehicle, ActivityLog, ConsultantName } from '../types';
 import { YARD_LAYOUT, CONSULTANTS, ALERT_THRESHOLDS, WASH_STATUS_OPTIONS } from '../constants';
-import { differenceInMinutes, differenceInHours, formatDistanceToNow } from 'date-fns';
+import { differenceInMinutes, differenceInHours, differenceInSeconds, formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale/pt-BR';
 import { getSafetyAnalysis } from '../services/geminiService';
 
@@ -200,88 +200,165 @@ const YardView: React.FC<YardViewProps> = ({
   const [highlightedSlot, setHighlightedSlot] = useState<number | null>(null);
   const [isDraggingVehicleId, setIsDraggingVehicleId] = useState<string | null>(null);
   const [dragHoverSlot, setDragHoverSlot] = useState<number | null>(null);
-  
-  const handleDragStart = (id: string) => {
-    setIsDraggingVehicleId(id);
+  const [dragHoverTab, setDragHoverTab] = useState<string | null>(null);
+  const autoScrollInterval = useRef<NodeJS.Timeout | null>(null);
+
+  // Cross-component tab highlighting during drag
+  useEffect(() => {
+    if (dragHoverTab) {
+      const el = document.getElementById(`tab-${dragHoverTab}`);
+      if (el) {
+        // Use a more intense styling for the target tab
+        const originalTransition = el.style.transition;
+        el.style.transition = 'all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1)';
+        el.style.transform = 'scale(1.15) translateX(10px)';
+        el.style.boxShadow = '0 10px 30px rgba(59, 130, 246, 0.4)';
+        el.style.borderColor = '#3b82f6';
+        el.style.zIndex = '1000';
+        el.style.position = 'relative';
+        
+        return () => {
+          el.style.transition = originalTransition;
+          el.style.transform = '';
+          el.style.boxShadow = '';
+          el.style.borderColor = '';
+          el.style.zIndex = '';
+          el.style.position = '';
+        };
+      }
+    }
+  }, [dragHoverTab]);
+
+  const startAutoScroll = (direction: 'up' | 'down' | 'left' | 'right') => {
+    if (autoScrollInterval.current) return;
+    
+    autoScrollInterval.current = setInterval(() => {
+      if (scrollContainerRef.current) {
+        const amount = 30;
+        if (direction === 'up') scrollContainerRef.current.scrollBy(0, -amount);
+        else if (direction === 'down') scrollContainerRef.current.scrollBy(0, amount);
+        else if (direction === 'left') scrollContainerRef.current.scrollBy(-amount, 0);
+        else if (direction === 'right') scrollContainerRef.current.scrollBy(amount, 0);
+      }
+    }, 50);
   };
 
-  const handleDragUpdate = (_event: unknown, info: { point: { x: number; y: number } }) => {
+  const stopAutoScroll = () => {
+    if (autoScrollInterval.current) {
+      clearInterval(autoScrollInterval.current);
+      autoScrollInterval.current = null;
+    }
+  };
+
+  const handleDragStart = (id: string) => {
+    setIsDraggingVehicleId(id);
+    if (window.navigator && window.navigator.vibrate) {
+      window.navigator.vibrate(10);
+    }
+  };
+
+  const handleDragUpdate = (event: MouseEvent | TouchEvent | PointerEvent, info: { point: { x: number; y: number } }) => {
     if (!isDraggingVehicleId) return;
 
-    const elements = document.elementsFromPoint(info.point.x, info.point.y);
+    // Viewport relative coordinates for elementsFromPoint
+    const x = info.point.x;
+    const y = info.point.y;
+
+    // Auto-scroll logic
+    const { innerWidth, innerHeight } = window;
+    const threshold = 100;
+    
+    if (x < threshold) startAutoScroll('left');
+    else if (x > innerWidth - threshold) startAutoScroll('right');
+    else if (y < threshold) startAutoScroll('up');
+    else if (y > innerHeight - threshold) startAutoScroll('down');
+    else stopAutoScroll();
+
+    const elements = document.elementsFromPoint(x, y);
     
     // Check for tabs/yards
     const tabElement = elements.find(el => el.id && el.id.startsWith('tab-yard'));
     if (tabElement) {
       const yardId = tabElement.id.replace('tab-', '');
       if (yardId !== layoutId) {
+        if (dragHoverTab !== yardId) {
+          setDragHoverTab(yardId);
+          if (window.navigator && window.navigator.vibrate) window.navigator.vibrate(5);
+        }
         setDragHoverSlot(null);
-        // Visual feedback for tab? We could change its color, but for now we just clear the slot hover
         return;
       }
+    } else {
+      setDragHoverTab(null);
     }
 
     const slotElement = elements.find(el => 
-      el.id && 
-      el.id.startsWith('slot-')
+      (el instanceof HTMLElement && el.dataset.slotIdx !== undefined) ||
+      (el.id && el.id.startsWith('slot-'))
     );
 
     if (slotElement) {
-      const idx = parseInt(slotElement.id.replace('slot-', ''), 10);
-      setDragHoverSlot(idx);
+      const idxAttr = (slotElement as HTMLElement).dataset.slotIdx;
+      const idx = idxAttr ? parseInt(idxAttr, 10) : parseInt(slotElement.id.replace('slot-', ''), 10);
+      
+      if (dragHoverSlot !== idx) {
+        setDragHoverSlot(idx);
+        if (window.navigator && window.navigator.vibrate) window.navigator.vibrate(5);
+      }
     } else {
       setDragHoverSlot(null);
     }
   };
 
-  const handleDragEnd = (_event: unknown, info: { point: { x: number; y: number } }, vehicle: Vehicle) => {
+  const handleDragEnd = (event: MouseEvent | TouchEvent | PointerEvent, info: { point: { x: number; y: number } }, vehicle: Vehicle) => {
+    stopAutoScroll();
+    
+    // Use the latest hover states detected in handleDragUpdate
+    const finalHoverSlot = dragHoverSlot;
+    const finalHoverTab = dragHoverTab;
+    
     setIsDraggingVehicleId(null);
     setDragHoverSlot(null);
-    
-    // Encontrar o elemento no ponto de liberação através das coordenadas da tela
-    const elements = document.elementsFromPoint(info.point.x, info.point.y);
+    setDragHoverTab(null);
     
     // Check for drop on other yard tab
-    const tabElement = elements.find(el => el.id && el.id.startsWith('tab-yard'));
-    if (tabElement && onMoveToYard) {
-      const targetYardId = tabElement.id.replace('tab-', '');
-      if (targetYardId !== layoutId) {
-        onMoveToYard(vehicle.id, targetYardId);
-        return;
-      }
+    if (finalHoverTab && onMoveToYard && finalHoverTab !== layoutId) {
+      onMoveToYard(vehicle.id, finalHoverTab);
+      return;
     }
 
-    const slotElement = elements.find(el => 
-      el.id && 
-      el.id.startsWith('slot-') && 
-      el.id !== `slot-${vehicle.slotIndex}`
-    );
-    
-    if (slotElement) {
-      const newSlotIdx = parseInt(slotElement.id.replace('slot-', ''), 10);
-      const targetVehicle = getVehicleAtSlot(newSlotIdx);
-      
-      if (newSlotIdx >= 0 && newSlotIdx < maxSlots) {
+    if (finalHoverSlot !== null && finalHoverSlot !== vehicle.slotIndex) {
+      if (finalHoverSlot >= 0 && finalHoverSlot < maxSlots) {
+        const targetVehicle = getVehicleAtSlot(finalHoverSlot);
+        
+        if (window.navigator && window.navigator.vibrate) {
+          window.navigator.vibrate(30);
+        }
+
         if (!targetVehicle) {
           // Vaga vazia - move normal
-          onUpdateVehicle({ ...vehicle, slotIndex: newSlotIdx });
+          onUpdateVehicle({ ...vehicle, slotIndex: finalHoverSlot });
           
           if (addToast) {
             addToast({
-              title: 'Veículo Realocado',
-              message: `O veículo ${vehicle.plate} foi movido para a vaga ${newSlotIdx + 1}.`,
+              title: 'Movimentação Rápida',
+              message: `O veículo ${vehicle.plate} foi reposicionado com sucesso para a vaga ${finalHoverSlot + 1}.`,
               type: 'success'
             });
           }
         } else {
           // Vaga ocupada - permuta
-          onUpdateVehicle({ ...vehicle, slotIndex: newSlotIdx });
-          onUpdateVehicle({ ...targetVehicle, slotIndex: vehicle.slotIndex });
+          const originalSlot = vehicle.slotIndex;
+          onUpdateVehicle({ ...vehicle, slotIndex: finalHoverSlot });
+          
+          setTimeout(() => {
+            onUpdateVehicle({ ...targetVehicle, slotIndex: originalSlot });
+          }, 150);
           
           if (addToast) {
             addToast({
-              title: 'Vagas Permutadas',
-              message: `Os veículos ${vehicle.plate} e ${targetVehicle.plate} trocaram de posição.`,
+              title: 'Permuta de Vagas',
+              message: `Os veículos ${vehicle.plate} e ${targetVehicle.plate} trocaram de posição estrategicamente.`,
               type: 'success'
             });
           }
@@ -783,45 +860,128 @@ const YardView: React.FC<YardViewProps> = ({
   };
 
   const getStayTimeInfo = (v: Vehicle) => {
-    const entryDate = new Date(v.entryTime);
-    const totalMinutes = differenceInMinutes(now, entryDate);
-    const hours = Math.floor(totalMinutes / 60);
-    const minutes = totalMinutes % 60;
+    const hours = differenceInHours(now, new Date(v.entryTime));
+    const isReady = v.washStatus === 'Veículo Pronto';
+    const hoursInStatus = isReady ? differenceInHours(now, new Date(v.statusChangedAt || v.entryTime)) : 0;
     
-    let colorClass = 'text-emerald-500';
-    let barColor = 'bg-emerald-500';
-    let statusLabel = 'EFICAZ';
-    let isSevere = false;
+    const isSevere = hours >= ALERT_THRESHOLDS.SEVERE || (isReady && hoursInStatus >= 4);
+    const isAttentionRequired = hours >= ALERT_THRESHOLDS.CRITICAL || (isReady && hoursInStatus >= 2);
+    
+    return { 
+      hours,
+      isAttentionRequired,
+      isSevere,
+      isReady,
+      hoursInStatus
+    };
+  };
 
-    if (hours >= ALERT_THRESHOLDS.SEVERE) {
-      colorClass = 'text-red-500';
-      barColor = 'bg-red-600';
-      statusLabel = 'EXCEDIDO';
-      isSevere = true;
-    } else if (hours >= ALERT_THRESHOLDS.CRITICAL) {
-      colorClass = 'text-orange-500';
-      barColor = 'bg-orange-500';
-      statusLabel = 'CRÍTICO';
-    } else if (hours >= ALERT_THRESHOLDS.WARNING) {
-      colorClass = 'text-amber-500';
-      barColor = 'bg-amber-500';
-      statusLabel = 'ALERTA';
+  const SLACountdown = ({ v, isDarkMode }: { v: Vehicle, isDarkMode: boolean }) => {
+    const [localNow, setLocalNow] = useState(new Date());
+
+    useEffect(() => {
+      const timer = setInterval(() => setLocalNow(new Date()), 1000);
+      return () => clearInterval(timer);
+    }, []);
+
+    const now = localNow;
+    const isReady = v.washStatus === 'Veículo Pronto';
+    const entryDate = new Date(v.entryTime);
+    const statusDate = new Date(v.statusChangedAt || v.entryTime);
+    
+    // SLA Total (Geral)
+    const totalMinutes = differenceInMinutes(now, entryDate);
+    const totalHours = totalMinutes / 60;
+    
+    // SLA Específico para "Pronto" (2h)
+    const readyLimit = 120; // 2 horas
+    
+    let severity: 'normal' | 'warning' | 'critical' | 'severe' = 'normal';
+    let label = '';
+    let timeDisplay = '';
+    let progress = 0;
+    let limit = 0;
+
+    if (isReady) {
+      limit = readyLimit;
+      const rMins = differenceInMinutes(now, statusDate);
+      const rSecs = differenceInSeconds(now, statusDate) % 60;
+      progress = (rMins / readyLimit) * 100;
+      timeDisplay = `${Math.floor(rMins / 60)}h ${rMins % 60}m ${rSecs}s`;
+      
+      if (rMins >= readyLimit * 2) severity = 'severe';
+      else if (rMins >= readyLimit) severity = 'critical';
+      else if (rMins >= readyLimit * 0.75) severity = 'warning';
+      
+      label = severity === 'normal' ? 'TEMPO PRONTO' : 'ENTREGA ATRASADA';
+    } else {
+      limit = ALERT_THRESHOLDS.SEVERE * 60;
+      const tMins = differenceInMinutes(now, entryDate);
+      const tSecs = differenceInSeconds(now, entryDate) % 60;
+      progress = (tMins / limit) * 100;
+      timeDisplay = `${Math.floor(totalHours)}h ${tMins % 60}m ${tSecs}s`;
+      
+      if (totalHours >= ALERT_THRESHOLDS.SEVERE) severity = 'severe';
+      else if (totalHours >= ALERT_THRESHOLDS.CRITICAL) severity = 'critical';
+      else if (totalHours >= ALERT_THRESHOLDS.WARNING) severity = 'warning';
+      
+      label = severity === 'normal' ? 'TOTAL ESTADIA' : 'SLA EXCEDIDO';
     }
 
-    const progressPercent = Math.min((totalMinutes / (ALERT_THRESHOLDS.SEVERE * 60)) * 100, 100);
-
-    const isAttentionRequired = hours >= ALERT_THRESHOLDS.CRITICAL;
-
-    return { 
-      formatted: `${hours}h ${minutes}m`, 
-      hours,
-      colorClass,
-      barColor,
-      statusLabel,
-      isSevere,
-      isAttentionRequired,
-      progressPercent
+    const colors = {
+      normal: isDarkMode ? 'text-emerald-500 bg-emerald-500/5' : 'text-emerald-600 bg-emerald-50',
+      warning: 'text-amber-500 bg-amber-500/10',
+      critical: 'text-orange-500 bg-orange-500/15',
+      severe: 'text-red-500 bg-red-500/20 animate-pulse'
     };
+
+    const barColors = {
+      normal: 'bg-emerald-500',
+      warning: 'bg-amber-500',
+      critical: 'bg-orange-500',
+      severe: 'bg-red-600'
+    };
+
+    return (
+      <div className="flex flex-col gap-1.5 w-full">
+        <div className="flex justify-between items-end px-1">
+          <div className="flex flex-col">
+            <span className={`text-[7px] font-black uppercase tracking-[0.2em] opacity-70 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+              {label}
+            </span>
+            <div className="flex items-center gap-1.5">
+              <i className={`fas fa-circle-notch text-[8px] ${severity !== 'normal' ? 'animate-spin-slow' : ''} ${severity === 'severe' ? 'text-red-500' : ''}`}></i>
+              <span className={`text-[13px] font-black tabular-nums tracking-tighter ${colors[severity].split(' ')[0]}`}>
+                {timeDisplay}
+              </span>
+            </div>
+          </div>
+          
+          <div className={`px-2 py-0.5 rounded-md text-[7px] font-black uppercase tracking-widest border transition-all ${colors[severity]} ${severity === 'severe' ? 'scale-110 shadow-lg shadow-red-500/20 border-red-500/30' : 'border-transparent'}`}>
+            {severity === 'severe' ? 'URGÊNCIA MÁXIMA' : severity === 'critical' ? 'CRÍTICO' : severity === 'warning' ? 'ALERTA' : 'OK'}
+          </div>
+        </div>
+
+        {/* Dynamic Progress Bar */}
+        <div className={`h-1.5 w-full rounded-full overflow-hidden flex ${isDarkMode ? 'bg-white/5' : 'bg-slate-100'}`}>
+          <motion.div 
+            initial={{ width: 0 }}
+            animate={{ width: `${Math.min(progress, 100)}%` }}
+            className={`h-full transition-all duration-1000 ${barColors[severity]} ${severity === 'severe' ? 'shadow-[0_0_10px_rgba(239,68,68,0.5)]' : ''}`}
+          />
+        </div>
+        
+        {/* Countdown until next milestone if not severe */}
+        {severity !== 'severe' && (
+          <div className="flex justify-between px-1">
+             <span className="text-[6px] font-bold text-slate-500 uppercase">Progresso SLA</span>
+             <span className="text-[6px] font-bold text-slate-500 uppercase">
+               {progress < 100 ? `${Math.floor(100 - progress)}% restante` : 'Limit Exceeded'}
+             </span>
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -1903,9 +2063,12 @@ const YardView: React.FC<YardViewProps> = ({
                         <motion.div 
                           key={`${idx}-${v ? v.id : 'empty'}`}
                           id={`slot-${idx}`}
+                          data-slot-idx={idx}
                           onClick={() => onSelectSlot(idx)}
                           drag={!!v}
                           dragSnapToOrigin={true}
+                          dragElastic={0.1}
+                          dragTransition={{ bounceStiffness: 600, bounceDamping: 20 }}
                           onDragStart={() => v && handleDragStart(v.id)}
                           onDrag={(e, info) => v && handleDragUpdate(e, info)}
                           onDragEnd={(e, info) => v && handleDragEnd(e, info, v)}
@@ -1914,7 +2077,7 @@ const YardView: React.FC<YardViewProps> = ({
                             scale: isDraggingVehicleId === v?.id ? 1.05 : 1, 
                             opacity: 1, 
                             y: 0,
-                            zIndex: isDraggingVehicleId === v?.id ? 200 : (dragHoverSlot === idx ? 50 : 1)
+                            zIndex: isDraggingVehicleId === v?.id ? 1000 : (dragHoverSlot === idx ? 500 : 1)
                           }}
                           transition={{ 
                             type: "spring", 
@@ -1924,19 +2087,43 @@ const YardView: React.FC<YardViewProps> = ({
                           }}
                           whileHover={{ scale: isDraggingVehicleId ? 1 : 1.02, transition: { duration: 0.2 } }}
                           whileTap={{ scale: 0.98 }}
-                          className={`relative p-5 pl-10 rounded-[2.8rem] border-2 transition-all duration-500 ease-in-out cursor-pointer group flex flex-col gap-3 overflow-hidden ${
-                            v 
-                              ? `${isDarkMode ? 'bg-[#161922] border-white/5 shadow-2xl' : 'bg-white border-slate-100 shadow-xl hover:shadow-2xl'}`
-                              : `${staleVacantClass} border-dashed hover:bg-blue-500/5 ${emptyAnim}`
-                          } ${isSelected ? 'animate-selected-fluid' : ''} ${info?.isAttentionRequired ? 'animate-critical-pulse ring-2 ring-red-500/30' : ''} ${info?.hours && info.hours >= 8 ? 'ring-4 ring-red-500 ring-offset-4 z-50 animate-critical-pulse' : ''} ${v?.washStatus === 'Veículo Pronto' ? 'animate-ready-pulse' : ''} ${opacityClass} ${pulseHighlight} ${highlightedSlot === idx ? 'animate-selection-highlight' : ''} ${riskySlots.includes(idx) ? 'ring-4 ring-orange-500 ring-offset-4 z-50 animate-pulse' : ''} ${isDraggingVehicleId === v?.id ? 'pointer-events-none opacity-80' : ''} ${dragHoverSlot === idx ? 'ring-4 ring-blue-500 border-blue-500 shadow-[0_0_20px_rgba(59,130,246,0.5)] scale-[1.02] z-50' : ''}`}
-                        >
-                          {(info?.isAttentionRequired || riskySlots.includes(idx)) && (
-                            <div className={`absolute top-4 right-4 z-20 w-8 h-8 rounded-full flex items-center justify-center text-white shadow-lg animate-bounce ${info?.hours && info.hours >= 8 ? 'bg-red-600 scale-110 shadow-red-500/50' : 'bg-orange-500'}`}>
-                              <i className={`fas ${info?.hours && info.hours >= 8 ? 'fa-skull-crossbones' : 'fa-triangle-exclamation'} text-xs`}></i>
+                           className={`relative p-5 pl-10 rounded-[2.8rem] border-2 transition-all duration-300 ease-out cursor-grab active:cursor-grabbing group flex flex-col gap-3 overflow-hidden ${
+                             v 
+                               ? `${isDarkMode ? 'bg-[#161922] border-white/5 shadow-2xl' : 'bg-white border-slate-100 shadow-xl hover:shadow-2xl'}`
+                               : `${staleVacantClass} border-dashed hover:bg-blue-500/5 ${emptyAnim}`
+                           } ${isSelected ? 'animate-selected-fluid' : ''} ${info?.isSevere ? 'ring-4 ring-red-500 ring-offset-4 z-50 animate-critical-pulse bg-red-500/[0.02]' : (info?.isAttentionRequired ? 'animate-critical-pulse ring-2 ring-orange-500/30' : '')} ${v?.washStatus === 'Veículo Pronto' && !info?.isAttentionRequired ? 'animate-ready-pulse' : ''} ${opacityClass} ${pulseHighlight} ${highlightedSlot === idx ? 'animate-selection-highlight' : ''} ${riskySlots.includes(idx) ? 'ring-4 ring-orange-500 ring-offset-4 z-50 animate-pulse' : ''} ${isDraggingVehicleId === v?.id ? 'pointer-events-none opacity-50 grayscale scale-95 z-[1000] !touch-none cursor-grabbing' : ''} ${dragHoverSlot === idx ? 'ring-4 ring-blue-500 border-blue-500 shadow-[0_0_30px_rgba(59,130,246,0.6)] scale-[1.05] z-50 bg-blue-500/[0.05]' : ''}`}
+                         >
+                           {info?.isSevere && (
+                             <div className="absolute inset-0 bg-red-600/[0.05] pointer-events-none z-0" style={{ backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 15px, rgba(239,68,68,0.05) 15px, rgba(239,68,68,0.05) 30px)' }}></div>
+                           )}
+                          {/* Swap Indicator */}
+                          {dragHoverSlot === idx && isDraggingVehicleId && v && v.id !== isDraggingVehicleId && (
+                            <div className="absolute inset-0 z-[60] bg-blue-600/20 backdrop-blur-[2px] flex items-center justify-center animate-in fade-in zoom-in duration-200">
+                               <div className="flex flex-col items-center gap-2">
+                                  <div className="w-12 h-12 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-lg animate-bounce">
+                                     <i className="fas fa-arrows-rotate text-xl"></i>
+                                  </div>
+                                  <span className="text-[10px] font-black text-white uppercase tracking-widest bg-blue-600 px-3 py-1 rounded-full shadow-lg">Permutar Vaga</span>
+                               </div>
                             </div>
                           )}
-                          {info?.hours && info.hours >= 8 && (
-                            <div className="absolute inset-0 bg-red-500/[0.03] pointer-events-none" style={{ backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 20px, rgba(239,68,68,0.05) 20px, rgba(239,68,68,0.05) 40px)' }}></div>
+
+                          {/* Move Indicator for empty slots */}
+                          {dragHoverSlot === idx && isDraggingVehicleId && !v && (
+                            <div className="absolute inset-0 z-[60] bg-emerald-500/10 backdrop-blur-[1px] flex items-center justify-center animate-in fade-in zoom-in duration-200">
+                               <div className="flex flex-col items-center gap-2">
+                                  <div className="w-10 h-10 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-lg animate-pulse">
+                                     <i className="fas fa-plus text-lg"></i>
+                                  </div>
+                                  <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest bg-white/80 dark:bg-black/40 px-3 py-1 rounded-full shadow-sm backdrop-blur">Posicionar Aqui</span>
+                               </div>
+                            </div>
+                          )}
+
+                          {(info?.isAttentionRequired || riskySlots.includes(idx)) && (
+                            <div className={`absolute top-4 right-4 z-20 w-8 h-8 rounded-full flex items-center justify-center text-white shadow-lg animate-bounce ${info?.isSevere ? 'bg-red-600 scale-110 shadow-red-500/50' : 'bg-orange-500'}`}>
+                              <i className={`fas ${info?.isSevere ? 'fa-skull-crossbones' : 'fa-triangle-exclamation'} text-xs`}></i>
+                            </div>
                           )}
                           {/* Marcações de Chão para Vagas */}
                           {!v && (
@@ -1970,23 +2157,24 @@ const YardView: React.FC<YardViewProps> = ({
                         {v ? (
                           <>
                             {/* CABEÇALHO DO CARD - ID E PRISMA INTEGRADOS */}
-                            <div className="flex justify-between items-start">
-                              <div className="flex gap-1.5 items-center flex-wrap max-w-[75%]">
-                                <div className={`px-2 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest shadow-md shrink-0 ${isDarkMode ? 'bg-blue-600 text-white border border-blue-500/30' : 'bg-slate-900 text-white'}`}>
-                                  ID-{v.id.slice(0, 6)}
+                            <div className="flex flex-col gap-4">
+                              <div className="flex justify-between items-start">
+                                <div className="flex gap-1.5 items-center flex-wrap max-w-[75%]">
+                                  <div className={`px-2 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest shadow-md shrink-0 ${isDarkMode ? 'bg-blue-600 text-white border border-blue-500/30' : 'bg-slate-900 text-white'}`}>
+                                    ID-{v.id.slice(0, 6)}
+                                  </div>
+                                  <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest shadow-md border shrink-0 transition-transform hover:scale-110 ${isDarkMode ? 'bg-[#1e2330] border-white/10 text-white' : 'bg-white border-slate-300 text-slate-900'}`}>
+                                     <div className="w-3 h-3 rounded-full border-2 border-white/30 shadow-sm" style={{ backgroundColor: v.prisma.color }} />
+                                     <span className="tabular-nums">#{v.prisma.number}</span>
+                                  </div>
                                 </div>
-                                <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest shadow-md border shrink-0 transition-transform hover:scale-110 ${isDarkMode ? 'bg-[#1e2330] border-white/10 text-white' : 'bg-white border-slate-300 text-slate-900'}`}>
-                                   <div className="w-3 h-3 rounded-full border-2 border-white/30 shadow-sm" style={{ backgroundColor: v.prisma.color }} />
-                                   <span className="tabular-nums">#{v.prisma.number}</span>
+                                <div className="flex items-center gap-1">
+                                   <div className={`w-3 h-3 rounded-full ${v.washStatus === 'Veículo Pronto' ? 'bg-emerald-500 animate-ready-pulse shadow-[0_0_10px_rgba(16,185,129,0.5)]' : (isDarkMode ? 'bg-white/10' : 'bg-slate-200')}`}></div>
                                 </div>
                               </div>
-                              <div className={`flex items-center gap-1.5 font-black uppercase tracking-tighter shrink-0 ${info?.colorClass}`}>
-                                {info?.isAttentionRequired && (
-                                  <i className="fas fa-triangle-exclamation text-red-500 animate-pulse mr-1"></i>
-                                )}
-                                <i className={`fas fa-clock text-[10px] ${info?.isAttentionRequired ? 'animate-pulse' : ''}`}></i>
-                                <span className="text-[12px]">{info?.formatted}</span>
-                              </div>
+
+                              {/* SLA MONITORING COMPONENT */}
+                              <SLACountdown v={v} isDarkMode={isDarkMode} />
                             </div>
                             
                             {/* NOME DO CLIENTE E STATUS DE ENTREGA */}
@@ -2055,6 +2243,15 @@ const YardView: React.FC<YardViewProps> = ({
                                    {v.consultant}
                                  </span>
                                </div>
+
+                               {v.estimatedCompletionTime && (
+                                 <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-500 animate-in fade-in zoom-in-95`}>
+                                   <i className="fas fa-magic text-[8px] animate-pulse"></i>
+                                   <span className="text-[9px] font-black uppercase tracking-tighter">
+                                     IA: {v.estimatedCompletionTime}
+                                   </span>
+                                 </div>
+                               )}
                                <button 
                                   onClick={(e) => { e.stopPropagation(); onViewHistory(v.id); }}
                                   className="text-[9px] font-black uppercase text-blue-500 hover:text-blue-400 transition-colors"

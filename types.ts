@@ -83,6 +83,9 @@ export interface Vehicle {
   deliveryStatus: DeliveryStatus;
   slotIndex: number; // 0-n
   yardId: string;
+  keyId?: string;
+  estimatedCompletionTime?: string; // ISO string or human-readable
+  estimationReasoning?: string;
 }
 
 export type UserRole = 'admin' | 'consultant' | 'operator' | 'manager';

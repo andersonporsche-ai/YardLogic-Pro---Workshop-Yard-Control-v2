@@ -10,6 +10,15 @@ export const CONSULTANTS: ConsultantName[] = [
   'Gabriel Alex'
 ];
 
+export const CONSULTANT_EMAILS: Record<ConsultantName, string> = {
+  'Nelson Yoshikazu': 'nelson@yardlogicpro.com',
+  'Rafael Perreira': 'rafael@yardlogicpro.com',
+  'Thiago Paixão': 'thiago@yardlogicpro.com',
+  'Alexandre da Costa': 'alexandre@yardlogicpro.com',
+  'Mirian': 'mirian@yardlogicpro.com',
+  'Gabriel Alex': 'gabriel@yardlogicpro.com'
+};
+
 export const WASH_STATUS_OPTIONS: WashStatus[] = [
   'Não Solicitado',
   'Reset Pos Blindagem',
@@ -256,6 +265,7 @@ export const DEFAULT_YARD_OPTIONS = [
   { id: 'tasks', label: 'Tarefas', icon: 'fa-tasks' },
   { id: 'idleHistory', label: 'Histórico Ociosidade', icon: 'fa-user-clock' },
   { id: 'criticalReport', label: 'Casos Críticos', icon: 'fa-exclamation-circle' },
+  { id: 'performanceReport', label: 'Desempenho', icon: 'fa-chart-line' },
 ];
 
 export const getSlotDisplayName = (index: number, row?: string, col?: number): string => {

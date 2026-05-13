@@ -352,3 +352,107 @@ export const getYardOptimizationSummary = async (vehicles: Vehicle[], logs: Acti
     return "Não foi possível gerar o resumo de otimização no momento.";
   }
 };
+
+export const getCompletionEstimation = async (vehicle: Vehicle, logs: ActivityLog[]) => {
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  
+  const prompt = `
+    Como um Especialista em Operações Porsche, analise o veículo abaixo para PROJETAR o horário e tempo de conclusão.
+    
+    VEÍCULOR:
+    - Modelo: ${vehicle.model}
+    - Placa: ${vehicle.plate}
+    - Serviço: ${vehicle.service}
+    - Status Atual: ${vehicle.washStatus}
+    - Entrada no Pátio: ${vehicle.entryTime}
+    - Última Mudança de Status: ${vehicle.statusChangedAt}
+    
+    HISTÓRICO RECENTE DO VEÍCULO:
+    ${JSON.stringify(logs.slice(0, 10))}
+    
+    CONTEXTO DE TEMPOS MÉDIOS (REFERÊNCIA PORSCHE):
+    - Lavagem: 45-60 min
+    - PDI: 2-4 horas
+    - Mecânica Básica: 1-3 horas
+    - Peças (Aguardando): 24h+
+    - Saída/Liberação: 15-30 min
+    
+    TAREFA:
+    1. Estime o tempo restante (em minutos ou horas).
+    2. Determine o horário provável de conclusão (considerando que o horário atual é ${new Date().toISOString()}).
+    3. Forneça uma breve justificativa técnica.
+    
+    RESPOSTA OBRIGATÓRIA EM JSON:
+    {
+      "estimatedTime": "1h 30m", // Tempo restante formatado
+      "completionTime": "2026-05-08T20:00:00Z", // ISO String do horário previsto
+      "reasoning": "Breve explicação do porquê desta estimativa baseada no histórico e serviço."
+    }
+    
+    Responda APENAS o JSON. Português do Brasil.
+  `;
+
+  try {
+    const response: GenerateContentResponse = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json"
+      }
+    });
+
+    return JSON.parse(response.text);
+  } catch (error) {
+    console.error("Completion Estimation Error:", error);
+    return {
+      estimatedTime: "--",
+      completionTime: null,
+      reasoning: "Não foi possível calcular a estimativa automágica."
+    };
+  }
+};
+
+export const getBulkCompletionEstimations = async (vehicles: Vehicle[], logs: ActivityLog[]) => {
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  
+  // Limitar número de veículos para não sobrecarregar o contexto
+  const relevantVehicles = vehicles.filter(v => v.washStatus !== 'Veículo Pronto').slice(0, 15);
+  
+  if (relevantVehicles.length === 0) return {};
+
+  const prompt = `
+    Analise a frota ativa para estimar os tempos de conclusão de CADA veículo.
+    
+    VEÍCULOS:
+    ${relevantVehicles.map(v => `- ID ${v.id}: ${v.model} (${v.plate}) - Serviço: ${v.service} - Status: ${v.washStatus} - Entrada: ${v.entryTime}`).join('\n')}
+    
+    HISTÓRICO RELEVANTE (LOGS):
+    ${JSON.stringify(logs.filter(l => relevantVehicles.some(v => v.id === l.vehicleId)).slice(0, 50))}
+    
+    DIRETRIZES:
+    - Baseie-se no tipo de serviço e tempo médio de execução Porsche.
+    - Estime o horário de conclusão (Considerando agora: ${new Date().toISOString()}).
+    - Responda um objeto onde a chave é o ID do veículo.
+    
+    RESPOSTA OBRIGATÓRIA EM JSON:
+    {
+      "VEHICLE_ID_1": { "time": "1h 15m", "reasoning": "..." },
+      "VEHICLE_ID_2": { "time": "24h+", "reasoning": "Aguardando peças..." }
+    }
+  `;
+
+  try {
+    const response: GenerateContentResponse = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json"
+      }
+    });
+
+    return JSON.parse(response.text);
+  } catch (error) {
+    console.error("Bulk Estimation Error:", error);
+    return {};
+  }
+};
