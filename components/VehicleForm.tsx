@@ -1093,12 +1093,24 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ slotIndex, initialService, ex
                     <input 
                       type="text" 
                       placeholder="Escaneie ou digite o ID da chave" 
-                      className={`w-full h-14 pl-12 pr-5 rounded-2xl border-2 font-bold transition-all outline-none focus:ring-4 focus:ring-blue-500/10 ${isDarkMode ? 'bg-white/5 border-white/5 text-white focus:border-blue-500/50' : 'bg-white border-slate-100 text-slate-800 focus:border-blue-500 shadow-sm'}`} 
+                      className={`w-full h-14 pl-12 pr-12 rounded-2xl border-2 font-bold transition-all outline-none focus:ring-4 focus:ring-blue-500/10 ${isDarkMode ? 'bg-white/5 border-white/5 text-white focus:border-blue-500/50' : 'bg-white border-slate-100 text-slate-800 focus:border-blue-500 shadow-sm'}`} 
                       value={formData.keyId || ''} 
                       onChange={e => {
                         setFormData({ ...formData, keyId: e.target.value });
                       }} 
                     />
+                    <AnimatePresence>
+                      {formData.keyId && (
+                        <motion.div 
+                          initial={{ opacity: 0, scale: 0.5, x: 10 }}
+                          animate={{ opacity: 1, scale: 1, x: 0 }}
+                          exit={{ opacity: 0, scale: 0.5, x: 10 }}
+                          className="absolute right-4 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-emerald-500/20 flex items-center justify-center border border-emerald-500/30"
+                        >
+                          <i className="fas fa-check text-emerald-500 text-[10px]"></i>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
                 </div>
               </div>

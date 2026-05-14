@@ -1434,16 +1434,71 @@ const App: React.FC = () => {
                 <PorscheLogo size={240} className="shrink-0" />
               </div>
               <motion.h2 
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ duration: 0.8, ease: "easeOut" }}
                 className={`text-3xl sm:text-4xl md:text-5xl font-outfit font-black uppercase tracking-tighter leading-[0.9] transition-all ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
               >
-                Logística de <span className="text-blue-600">Pátios</span> <motion.span 
-                  animate={{ opacity: [0.3, 0.6, 0.3] }}
-                  transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
-                  className="opacity-40"
-                >Porsche</motion.span>
+                <div className="overflow-hidden inline-block py-1">
+                  <motion.span
+                    initial={{ y: "100%", opacity: 0, filter: "blur(10px)" }}
+                    animate={{ y: 0, opacity: 1, filter: "blur(0px)" }}
+                    transition={{ duration: 1.2, ease: [0.16, 1, 0.3, 1], delay: 0.1 }}
+                    className="inline-block"
+                  >
+                    Logística de
+                  </motion.span>
+                </div>{" "}
+                <div className="overflow-hidden inline-block py-1">
+                  <motion.span
+                    initial={{ y: "100%", opacity: 0, filter: "blur(10px)" }}
+                    animate={{ y: 0, opacity: 1, filter: "blur(0px)" }}
+                    transition={{ duration: 1.2, ease: [0.16, 1, 0.3, 1], delay: 0.3 }}
+                    className="text-blue-600 inline-block relative"
+                  >
+                    Pátios
+                    <motion.div 
+                      initial={{ scaleX: 0 }}
+                      animate={{ scaleX: 1 }}
+                      transition={{ duration: 1, delay: 1.2, ease: "circOut" }}
+                      className="absolute -bottom-1 left-0 right-0 h-1 bg-blue-600/30 origin-left rounded-full"
+                    />
+                  </motion.span>
+                </div>{" "}
+                <motion.span 
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ 
+                    opacity: 1,
+                    scale: 1
+                  }}
+                  transition={{ 
+                    duration: 1.5, 
+                    delay: 0.6,
+                    ease: [0.16, 1, 0.3, 1]
+                  }}
+                  className="inline-block relative px-2"
+                >
+                  <motion.span
+                    animate={{ 
+                      opacity: [0.4, 0.7, 0.4],
+                    }}
+                    transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
+                    className="opacity-40"
+                  >
+                    Porsche
+                  </motion.span>
+                  
+                  {/* Subtle sweep effect on Porsche text */}
+                  <motion.div 
+                    animate={{ 
+                      left: ['-100%', '200%'],
+                    }}
+                    transition={{ 
+                      duration: 2.5, 
+                      repeat: Infinity, 
+                      repeatDelay: 4,
+                      ease: "easeInOut"
+                    }}
+                    className="absolute inset-0 z-10 w-full h-full bg-gradient-to-r from-transparent via-white/30 to-transparent -skew-x-[20deg] pointer-events-none"
+                  />
+                </motion.span>
               </motion.h2>
             </div>
             <div className="flex flex-wrap items-center gap-3 sm:gap-4">

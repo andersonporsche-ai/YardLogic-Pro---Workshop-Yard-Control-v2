@@ -437,9 +437,52 @@ const Auth: React.FC<AuthProps> = ({ onLogin, isDarkMode, isResettingPassword, o
           <div className="flex items-center gap-6">
             <PorscheLogo size={300} />
           </div>
-          <p className="text-[10px] font-space font-black uppercase tracking-[0.3em] text-slate-500">
-            Acesso Restrito Porsche
-          </p>
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.5, duration: 1 }}
+            className="flex flex-col items-center"
+          >
+            <div className="overflow-hidden py-1">
+              <motion.p 
+                initial={{ y: "100%", opacity: 0, filter: "blur(5px)" }}
+                animate={{ y: 0, opacity: 1, filter: "blur(0px)" }}
+                transition={{ duration: 1, ease: [0.16, 1, 0.3, 1], delay: 0.6 }}
+                className={`text-[10px] font-space font-black uppercase tracking-[0.3em] ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}
+              >
+                Logística de Pátio
+              </motion.p>
+            </div>
+            
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 1, delay: 0.8 }}
+              className="relative px-4"
+            >
+              <motion.div 
+                animate={{ opacity: [0.4, 0.7, 0.4] }}
+                transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+                className="text-[11px] font-bold text-blue-500 uppercase tracking-[0.4em] mt-1"
+              >
+                Porsche
+              </motion.div>
+              
+              {/* Shine effect for Auth screen too */}
+              <motion.div 
+                animate={{ 
+                  left: ['-100%', '200%'],
+                }}
+                transition={{ 
+                  duration: 2, 
+                  repeat: Infinity, 
+                  repeatDelay: 5,
+                  ease: "easeInOut"
+                }}
+                className="absolute inset-0 z-10 w-full h-full bg-gradient-to-r from-transparent via-blue-500/20 to-transparent -skew-x-[25deg] pointer-events-none"
+              />
+            </motion.div>
+          </motion.div>
         </div>
 
         <AnimatePresence mode="wait">

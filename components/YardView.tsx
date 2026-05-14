@@ -1001,35 +1001,61 @@ const YardView: React.FC<YardViewProps> = ({
               </button>
             </div>
             
-            <div 
-              id="mini-map-container"
-              className={`relative w-48 h-32 rounded-xl overflow-hidden cursor-crosshair border transition-all ${isDraggingMiniMap ? 'ring-2 ring-blue-500/50' : ''} ${isDarkMode ? 'bg-black/40 border-white/5' : 'bg-slate-100 border-slate-200'}`}
-              onMouseDown={handleMiniMapMouseDown}
-              onTouchStart={(e) => handleMiniMapInteraction(e, true)}
-              onTouchMove={(e) => handleMiniMapInteraction(e, true)}
-            >
-              {/* Representação das Filas no Mini-Mapa */}
-              <div className="absolute inset-0 p-2 flex flex-col gap-2">
-                {groupedSectorsByRow.map((rowItems, rIdx) => (
-                  <div key={rIdx} className="flex gap-2">
-                    {rowItems.map((item, iIdx) => {
-                      if ('isGroup' in item && item.isGroup) {
-                        return (
-                          <div key={iIdx} className="flex flex-col gap-1">
-                            {item.sectors.map((s, sIdx) => (
-                              <div key={sIdx} className={`w-4 h-2 rounded-sm ${isDarkMode ? 'bg-white/10' : 'bg-slate-300'}`}></div>
-                            ))}
-                          </div>
-                        );
-                      }
-                      const sector = item as YardSector;
+          <div 
+            id="mini-map-container"
+            className={`relative w-48 h-32 rounded-xl overflow-hidden cursor-crosshair border transition-all ${isDraggingMiniMap ? 'ring-2 ring-blue-500/50 shadow-lg' : ''} ${isDarkMode ? 'bg-black/40 border-white/5' : 'bg-slate-100 border-slate-200'}`}
+            onMouseDown={handleMiniMapMouseDown}
+            onTouchStart={(e) => handleMiniMapInteraction(e, true)}
+            onTouchMove={(e) => handleMiniMapInteraction(e, true)}
+          >
+            {/* Representação das Filas no Mini-Mapa */}
+            <div className="absolute inset-0 p-2 flex flex-col gap-1.5 scroll-smooth">
+              {groupedSectorsByRow.map((rowItems, rIdx) => (
+                <div key={rIdx} className="flex gap-1">
+                  {rowItems.map((item, iIdx) => {
+                    if ('isGroup' in item && item.isGroup) {
                       return (
-                        <div key={iIdx} className={`w-4 h-2 rounded-sm ${sector.isCorridor ? 'opacity-20' : (isDarkMode ? 'bg-white/10' : 'bg-slate-300')}`}></div>
+                        <div key={iIdx} className="flex flex-col gap-0.5">
+                          {item.sectors.map((s, sIdx) => (
+                            <div key={sIdx} className="flex gap-0.5">
+                              {Array.from({ length: s.slots }).map((_, slotIdx) => {
+                                const globalIdx = s.startIdx + slotIdx;
+                                const v = getVehicleAtSlot(globalIdx);
+                                return (
+                                  <div 
+                                    key={slotIdx} 
+                                    className={`w-1 h-1 rounded-full transition-colors ${v ? '' : (isDarkMode ? 'bg-white/10' : 'bg-slate-300')}`}
+                                    style={v ? { backgroundColor: v.prisma.color } : {}}
+                                  ></div>
+                                );
+                              })}
+                            </div>
+                          ))}
+                        </div>
                       );
-                    })}
-                  </div>
-                ))}
-              </div>
+                    }
+                    const sector = item as YardSector;
+                    if (sector.isCorridor) return <div key={iIdx} className="w-2 h-1 opacity-10 bg-slate-500"></div>;
+                    
+                    return (
+                      <div key={iIdx} className="flex flex-wrap gap-0.5 max-w-[40px]">
+                        {Array.from({ length: sector.slots }).map((_, slotIdx) => {
+                          const globalIdx = sector.startIdx + slotIdx;
+                          const v = getVehicleAtSlot(globalIdx);
+                          return (
+                            <div 
+                              key={slotIdx} 
+                              className={`w-1 h-1 rounded-full transition-colors ${v ? '' : (isDarkMode ? 'bg-white/10' : 'bg-slate-300')}`}
+                              style={v ? { backgroundColor: v.prisma.color } : {}}
+                            ></div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
 
               {/* Indicador de Viewport (Onde o usuário está olhando) */}
               <div 
@@ -1853,81 +1879,91 @@ const YardView: React.FC<YardViewProps> = ({
 
         {isEditMode ? (
           <div className="flex-1 flex flex-col items-center justify-center p-8 animate-in fade-in zoom-in-95 duration-500">
-            <div className={`w-full max-w-4xl p-12 rounded-[3rem] border-2 border-dashed ${isDarkMode ? 'bg-indigo-500/5 border-indigo-500/20' : 'bg-indigo-50 border-indigo-200'}`}>
-              <div className="flex items-center justify-between mb-8">
-                <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 rounded-2xl bg-indigo-600 flex items-center justify-center text-white shadow-xl shadow-indigo-600/20">
-                    <i className="fas fa-layer-group text-2xl"></i>
+            <div className={`w-full max-w-6xl p-12 rounded-[3rem] border-2 border-dashed ${isDarkMode ? 'bg-indigo-500/5 border-indigo-500/20 shadow-2xl' : 'bg-indigo-50 border-indigo-200 shadow-xl'}`}>
+              <div className="flex flex-col md:flex-row items-center justify-between gap-8 mb-12">
+                <div className="flex items-center gap-6">
+                  <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-indigo-600 to-blue-700 flex items-center justify-center text-white shadow-2xl shadow-indigo-600/30 relative overflow-hidden">
+                    <motion.div 
+                      animate={{ rotate: 360 }}
+                      transition={{ duration: 10, repeat: Infinity, ease: "linear" }}
+                      className="absolute inset-0 opacity-20"
+                      style={{ backgroundImage: 'conic-gradient(from 0deg, transparent, white, transparent)' }}
+                    />
+                    <i className="fas fa-layer-group text-3xl relative z-10"></i>
                   </div>
                   <div>
-                    <h2 className={`text-3xl font-black uppercase tracking-tighter ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Organizador de Pátio</h2>
-                    <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mt-1">Arraste os blocos para definir a ordem dos setores</p>
+                    <h2 className={`text-4xl font-black uppercase tracking-tighter ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Customização do Layout</h2>
+                    <p className="text-sm font-bold text-slate-500 uppercase tracking-widest mt-1">Configure a ordem visual dos setores do pátio</p>
                   </div>
                 </div>
-                <div className="flex gap-4">
+                <div className="flex items-center gap-3">
                    <button 
                     onClick={resetLayout}
-                    className="px-6 py-3 rounded-xl border-2 border-red-500/20 text-red-500 text-[10px] font-black uppercase tracking-widest hover:bg-red-500/10 transition-all"
+                    className="group px-6 h-14 rounded-2xl border-2 border-red-500/20 text-red-500 text-[11px] font-black uppercase tracking-widest hover:bg-red-500 hover:text-white hover:border-red-500 transition-all flex items-center gap-3"
                   >
+                    <i className="fas fa-rotate-left transition-transform group-hover:-rotate-90"></i>
                     Resetar Padrão
                   </button>
                   <button 
                     onClick={() => setIsEditMode(false)}
-                    className="px-8 py-3 rounded-xl bg-indigo-600 text-white text-[10px] font-black uppercase tracking-widest shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 transition-all"
+                    className="px-10 h-14 rounded-2xl bg-indigo-600 text-white text-[11px] font-black uppercase tracking-widest shadow-lg shadow-indigo-600/30 hover:bg-indigo-700 hover:scale-105 active:scale-95 transition-all flex items-center gap-3"
                   >
-                    Finalizar Edição
+                    <i className="fas fa-check"></i>
+                    Salvar e Sair
                   </button>
                 </div>
               </div>
 
-              <DndContext
-                sensors={sensors}
-                collisionDetection={closestCenter}
-                onDragStart={handleLayoutDragStart}
-                onDragEnd={handleLayoutDragEnd}
-              >
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <SortableContext
-                    items={currentLayout.map(item => item.row)}
-                    strategy={verticalListSortingStrategy}
-                  >
-                    {currentLayout.map((item) => (
-                      <SortableItem key={item.row} id={item.row} sector={item as YardSector} isDarkMode={isDarkMode} />
-                    ))}
-                  </SortableContext>
-                </div>
-                
-                <DragOverlay dropAnimation={{
-                  sideEffects: defaultDropAnimationSideEffects({
-                    styles: {
-                      active: {
-                        opacity: '0.5',
+              <div className="bg-slate-500/5 rounded-[2.5rem] p-8 border border-white/5">
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  onDragStart={handleLayoutDragStart}
+                  onDragEnd={handleLayoutDragEnd}
+                >
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <SortableContext
+                      items={currentLayout.map(item => item.row)}
+                      strategy={verticalListSortingStrategy}
+                    >
+                      {currentLayout.map((item) => (
+                        <SortableItem key={item.row} id={item.row} sector={item as YardSector} isDarkMode={isDarkMode} />
+                      ))}
+                    </SortableContext>
+                  </div>
+                  
+                  <DragOverlay dropAnimation={{
+                    sideEffects: defaultDropAnimationSideEffects({
+                      styles: {
+                        active: {
+                          opacity: '0.5',
+                        },
                       },
-                    },
-                  }),
-                }}>
-                  {activeDragId ? (
-                    <div className={`p-4 rounded-2xl border-2 flex items-center justify-between bg-indigo-600 border-indigo-400 text-white shadow-2xl scale-105 opacity-90`}>
-                      <div className="flex items-center gap-4">
-                        <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center font-black text-xs text-white">
-                          {activeDragId}
+                    }),
+                  }}>
+                    {activeDragId ? (
+                      <div className={`p-6 rounded-[2rem] border-2 flex items-center justify-between bg-gradient-to-br from-indigo-600 to-blue-700 border-white/20 text-white shadow-2xl scale-110 opacity-100 z-[1000]`}>
+                        <div className="flex items-center gap-5">
+                          <div className="w-12 h-12 rounded-2xl bg-white/20 flex items-center justify-center font-black text-lg text-white shadow-inner">
+                            {activeDragId}
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="text-sm font-black uppercase tracking-tight">
+                              {currentLayout.find(i => i.row === activeDragId)?.label}
+                            </span>
+                            <span className="text-[10px] font-bold text-white/60 uppercase tracking-widest">
+                              {currentLayout.find(i => i.row === activeDragId)?.slots} Vagas • Setor {activeDragId}
+                            </span>
+                          </div>
                         </div>
-                        <div className="flex flex-col">
-                          <span className="text-xs font-black uppercase tracking-tight">
-                            {currentLayout.find(i => i.row === activeDragId)?.label}
-                          </span>
-                          <span className="text-[9px] font-bold text-white/60 uppercase">
-                            {currentLayout.find(i => i.row === activeDragId)?.slots} Vagas
-                          </span>
-                        </div>
+                        <i className="fas fa-grip-lines text-2xl opacity-40"></i>
                       </div>
-                      <i className="fas fa-grip-lines opacity-40"></i>
-                    </div>
-                  ) : null}
-                </DragOverlay>
-              </DndContext>
+                    ) : null}
+                  </DragOverlay>
+                </DndContext>
+              </div>
 
-              <div className="mt-12 p-6 rounded-2xl bg-slate-500/5 border border-slate-500/10 flex items-center gap-4">
+              <div className="mt-12 p-8 rounded-3xl bg-blue-600/5 border border-blue-500/10 flex items-center gap-6">
                 <i className="fas fa-info-circle text-indigo-500"></i>
                 <p className="text-[10px] font-medium text-slate-500 leading-relaxed uppercase tracking-wide">
                   A ordem definida aqui afeta a disposição vertical dos setores na visão geral e no mini-mapa. 
